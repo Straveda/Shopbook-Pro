@@ -4,8 +4,10 @@ import express from 'express';
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 import crypto from 'crypto';
-import { getCollection, isConnected } from '../api/db.js';
+import { getCollection, isConnected, getDatabase } from '../api/db.js';
 import { sendPasswordResetEmail } from '../utils/email.js';
+import { authenticateToken } from '../middleware/auth.js';
+import { ObjectId } from 'mongodb';
 
 const router = express.Router();
 
@@ -105,7 +107,7 @@ router.post('/forgot-password', async (req, res) => {
     const user = await usersCollection.findOne({ email });
 
     if (!user) {
-      return res.json({ 
+      return res.json({
         message: 'If an account exists with this email, a password reset link has been sent.'
       });
     }
@@ -117,7 +119,7 @@ router.post('/forgot-password', async (req, res) => {
     // Store hashed token and expiry in database
     await usersCollection.updateOne(
       { _id: user._id },
-      { 
+      {
         $set: {
           resetPasswordToken: resetTokenHash,
           resetPasswordExpires: new Date(Date.now() + 3600000) // 1 hour
@@ -136,14 +138,14 @@ router.post('/forgot-password', async (req, res) => {
       // Log the error but return success for security
     }
 
-    res.json({ 
+    res.json({
       message: 'Password reset link sent to your email',
       ...(process.env.NODE_ENV === 'development' && { resetUrl })
     });
 
   } catch (error) {
     console.error('❌ Forgot password error:', error);
-    res.status(500).json({ 
+    res.status(500).json({
       message: 'Server error occurred',
       error: process.env.NODE_ENV === 'development' ? error.message : undefined
     });
@@ -224,7 +226,7 @@ router.post('/reset-password', async (req, res) => {
       { _id: user._id },
       {
         $set: { password: hashedPassword },
-        $unset: { 
+        $unset: {
           resetPasswordToken: '',
           resetPasswordExpires: ''
         }
@@ -237,10 +239,125 @@ router.post('/reset-password', async (req, res) => {
 
   } catch (error) {
     console.error('Reset password error:', error);
-    res.status(500).json({ 
+    res.status(500).json({
       message: 'Server error occurred',
       error: process.env.NODE_ENV === 'development' ? error.message : undefined
     });
+  }
+});
+
+// ============================================
+// PROFILE MANAGEMENT (PROTECTED)
+// ============================================
+
+// GET PROFILE
+router.get('/profile', authenticateToken, async (req, res) => {
+  try {
+    const usersCollection = await getCollection('users');
+    const userIdStr = req.user.userId;
+    const userId = ObjectId.isValid(userIdStr) ? new ObjectId(userIdStr) : userIdStr;
+    const user = await usersCollection.findOne({ _id: userId });
+
+    if (!user) {
+      return res.status(404).json({ message: 'User not found' });
+    }
+
+    res.json({
+      success: true,
+      user: {
+        id: user._id,
+        name: user.name,
+        email: user.email,
+        createdAt: user.createdAt
+      }
+    });
+  } catch (error) {
+    console.error('Get profile error:', error);
+    res.status(500).json({ message: 'Server error', error: error.message });
+  }
+});
+
+// UPDATE PROFILE
+router.put('/profile', authenticateToken, async (req, res) => {
+  try {
+    const { name, email } = req.body;
+    const usersCollection = await getCollection('users');
+    const userId = new ObjectId(req.user.userId);
+
+    // Check if email is being changed and if it's already taken
+    if (email) {
+      const existingUser = await usersCollection.findOne({
+        email,
+        _id: { $ne: userId }
+      });
+      if (existingUser) {
+        return res.status(400).json({ message: 'Email already in use' });
+      }
+    }
+
+    const updateData = {};
+    if (name) updateData.name = name;
+    if (email) updateData.email = email;
+
+    const result = await usersCollection.updateOne(
+      { _id: userId },
+      { $set: updateData }
+    );
+
+    if (result.matchedCount === 0) {
+      return res.status(404).json({ message: 'User not found' });
+    }
+
+    res.json({
+      success: true,
+      message: 'Profile updated successfully',
+      user: { name, email }
+    });
+  } catch (error) {
+    console.error('Update profile error:', error);
+    res.status(500).json({ message: 'Server error', error: error.message });
+  }
+});
+
+// CHANGE PASSWORD
+router.put('/change-password', authenticateToken, async (req, res) => {
+  try {
+    const { currentPassword, newPassword } = req.body;
+
+    if (!currentPassword || !newPassword) {
+      return res.status(400).json({ message: 'Current and new password are required' });
+    }
+
+    const usersCollection = await getCollection('users');
+    const userId = new ObjectId(req.user.userId);
+    const user = await usersCollection.findOne({ _id: userId });
+
+    if (!user) {
+      return res.status(404).json({ message: 'User not found' });
+    }
+
+    // Verify current password
+    const isValidPassword = await bcrypt.compare(currentPassword, user.password);
+    if (!isValidPassword) {
+      return res.status(401).json({ message: 'Invalid current password' });
+    }
+
+    // Hash new password
+    const hashedPassword = await bcrypt.hash(newPassword, 10);
+
+    // Update password
+    await usersCollection.updateOne(
+      { _id: userId },
+      { $set: { password: hashedPassword } }
+    );
+
+    res.json({
+      success: true,
+      message: 'Password updated successfully'
+    });
+  } catch (error) {
+    console.error('Change password error:', error);
+    res.status(500).json({ message: 'Server error', error: error.message });
   }
 });
 
@@ -249,17 +366,17 @@ router.get('/test-db', async (req, res) => {
   try {
     const usersCollection = await getCollection('users');
     const count = await usersCollection.countDocuments();
-    
-    res.json({ 
-      success: true, 
+
+    res.json({
+      success: true,
       message: 'Database connected',
-      userCount: count 
+      userCount: count
     });
   } catch (error) {
     console.error('Database test failed:', error);
-    res.status(500).json({ 
-      success: false, 
-      error: error.message 
+    res.status(500).json({
+      success: false,
+      error: error.message
     });
   }
 });

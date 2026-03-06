@@ -24,6 +24,7 @@ export function AddCustomerDialog({ open, onOpenChange, onSuccess }: AddCustomer
   const [loading, setLoading] = useState(false);
   const [paymentType, setPaymentType] = useState<'full' | 'partial' | 'pending'>('full');
   const [dueDate, setDueDate] = useState<Date>();
+  const [category, setCategory] = useState<'regular' | 'retailer' | 'wholesaler'>('regular');
   const [formData, setFormData] = useState({
     name: "",
     phone: "",
@@ -36,7 +37,7 @@ export function AddCustomerDialog({ open, onOpenChange, onSuccess }: AddCustomer
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    
+
     if (!formData.name || !formData.phone) {
       toast.error("Name and phone number are required");
       return;
@@ -84,7 +85,7 @@ export function AddCustomerDialog({ open, onOpenChange, onSuccess }: AddCustomer
     }
 
     setLoading(true);
-    
+
     try {
       // Step 1: Create customer
       const customerResponse = await customerService.addCustomer({
@@ -94,15 +95,29 @@ export function AddCustomerDialog({ open, onOpenChange, onSuccess }: AddCustomer
         address: formData.address,
         city: formData.city,
         creditLimit: totalAmount,
+        category,
       });
 
-      if (!customerResponse?.success) {
-        toast.error(customerResponse.message || "Failed to create customer");
+      if (!(customerResponse && customerResponse.success)) {
+        toast.error(customerResponse?.message || "Failed to create customer");
         setLoading(false);
         return;
       }
 
-      const customerId = (customerResponse.data as any)._id;
+      console.log('✅ Customer Create Response:', customerResponse);
+
+      // Handle data nesting in response
+      const responseData = (customerResponse as any).data;
+      const customerId = responseData?._id || responseData?.customer?._id || (responseData?.data?._id);
+
+      if (!customerId) {
+        console.error("❌ Could not find customer ID in response:", customerResponse);
+        toast.error("Customer created but system lost connection. Please refresh the page.");
+        setLoading(false);
+        onOpenChange(false);
+        onSuccess?.();
+        return;
+      }
 
       // Step 2: Determine payment type and amounts
       let paidAmountValue = 0;
@@ -120,8 +135,8 @@ export function AddCustomerDialog({ open, onOpenChange, onSuccess }: AddCustomer
         amount: totalAmount,
         paymentType: paymentType,
         paidAmount: paidAmountValue,
-        dueDate: (paymentType === 'partial' || paymentType === 'pending') && dueDate 
-          ? dueDate.toISOString() 
+        dueDate: (paymentType === 'partial' || paymentType === 'pending') && dueDate
+          ? dueDate.toISOString()
           : undefined
       };
 
@@ -137,11 +152,11 @@ export function AddCustomerDialog({ open, onOpenChange, onSuccess }: AddCustomer
       if ((paymentType === 'partial' || paymentType === 'pending') && dueDate) {
         try {
           console.log('📝 Setting due date for customer:', customerId, dueDate.toISOString());
-          const dueDateResponse = await api.put(`/customers/${customerId}/due-date`, {
+          const dueDateResponse = await api.put<any>(`/customers/${customerId}/due-date`, {
             dueDate: dueDate.toISOString()
           });
           console.log('✅ Due date response:', dueDateResponse.data);
-          if (dueDateResponse.data.success) {
+          if (dueDateResponse.data?.success) {
             console.log('✅ Due date set successfully for customer:', dueDate.toISOString());
           }
         } catch (error: any) {
@@ -162,7 +177,7 @@ export function AddCustomerDialog({ open, onOpenChange, onSuccess }: AddCustomer
       await new Promise(resolve => setTimeout(resolve, 500));
 
       toast.success(`Customer ${formData.name} added successfully!`);
-      
+
       // Reset form
       setFormData({
         name: "",
@@ -175,7 +190,8 @@ export function AddCustomerDialog({ open, onOpenChange, onSuccess }: AddCustomer
       });
       setPaymentType('full');
       setDueDate(undefined);
-      
+      setCategory('regular');
+
       onOpenChange(false);
       onSuccess?.();
     } catch (error) {
@@ -266,6 +282,20 @@ export function AddCustomerDialog({ open, onOpenChange, onSuccess }: AddCustomer
                   disabled={loading}
                 />
               </div>
+
+              <div className="space-y-2">
+                <Label htmlFor="category">Customer Category</Label>
+                <Select value={category} onValueChange={(value: any) => setCategory(value)} disabled={loading}>
+                  <SelectTrigger id="category">
+                    <SelectValue placeholder="Select category" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="regular">Regular Customer</SelectItem>
+                    <SelectItem value="retailer">Retailer</SelectItem>
+                    <SelectItem value="wholesaler">Wholesaler</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
             </div>
 
             {/* Total Amount Section */}
@@ -286,7 +316,7 @@ export function AddCustomerDialog({ open, onOpenChange, onSuccess }: AddCustomer
             {formData.totalAmount && (
               <div className="space-y-3 pt-4 border-t">
                 <h3 className="font-semibold text-sm">Payment Status</h3>
-                
+
                 <div className="space-y-2">
                   <Label htmlFor="paymentType">How did customer pay?</Label>
                   <Select value={paymentType} onValueChange={(value: any) => setPaymentType(value)} disabled={loading}>

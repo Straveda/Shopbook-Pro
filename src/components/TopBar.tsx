@@ -5,7 +5,7 @@
 
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { Search, Plus, Bell, User, LogOut } from "lucide-react";
+import { Search, Plus, Bell, User, LogOut, Settings } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { SidebarTrigger } from "@/components/ui/sidebar";
@@ -24,7 +24,7 @@ export function TopBar() {
   const navigate = useNavigate();
   const [quickSaleOpen, setQuickSaleOpen] = useState(false);
   const [searchValue, setSearchValue] = useState("");
-  
+
   const { user, notifications, unreadCount, logout } = useTopBar();
   const { results, search } = useSearch();
 
@@ -51,7 +51,7 @@ export function TopBar() {
 
   return (
     <>
-      <header className="h-16 border-b bg-card flex items-center justify-between px-6 gap-4">
+      <header className="h-16 border-b bg-background/80 backdrop-blur-md sticky top-0 z-50 flex items-center justify-between px-6 gap-4">
         {/* Left Section: Menu & Search */}
         <div className="flex items-center gap-4 flex-1">
           <SidebarTrigger />
@@ -63,7 +63,7 @@ export function TopBar() {
               value={searchValue}
               onChange={(e) => handleSearch(e.target.value)}
             />
-            
+
             {/* Search Results Dropdown */}
             {searchValue && results.results.length > 0 && (
               <div className="absolute top-full left-0 right-0 mt-2 bg-white dark:bg-slate-900 border rounded-lg shadow-lg z-50 max-h-96 overflow-y-auto">
@@ -91,9 +91,9 @@ export function TopBar() {
         {/* Right Section: Actions */}
         <div className="flex items-center gap-2">
           {/* Quick Sale Button */}
-          <Button 
-            size="sm" 
-            className="gap-2 bg-teal-500 hover:bg-teal-600" 
+          <Button
+            size="sm"
+            className="gap-2 bg-teal-500 hover:bg-teal-600"
             onClick={() => setQuickSaleOpen(true)}
           >
             <Plus className="h-4 w-4" />
@@ -118,7 +118,7 @@ export function TopBar() {
                 Notifications ({unreadCount})
               </DropdownMenuLabel>
               <DropdownMenuSeparator />
-              
+
               {notifications.length === 0 ? (
                 <div className="px-4 py-8 text-center text-sm text-muted-foreground">
                   No notifications
@@ -162,16 +162,17 @@ export function TopBar() {
 
               <DropdownMenuSeparator />
 
-              <DropdownMenuItem 
-                onClick={() => navigate('/settings/profile')}
+              <DropdownMenuItem
+                onClick={() => navigate('/settings')}
                 className="cursor-pointer"
               >
-                Profile Settings
+                <Settings className="w-4 h-4 mr-2" />
+                <span>Profile Settings</span>
               </DropdownMenuItem>
 
               <DropdownMenuSeparator />
 
-              <DropdownMenuItem 
+              <DropdownMenuItem
                 onClick={handleLogout}
                 className="text-red-600 focus:text-red-600 focus:bg-red-50 dark:focus:bg-red-950 cursor-pointer"
               >

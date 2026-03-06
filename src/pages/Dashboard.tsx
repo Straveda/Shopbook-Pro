@@ -40,12 +40,12 @@ export default function Dashboard() {
     fetchDashboardData();
   }, []);
 
-  // Auto-refresh dashboard every 10 seconds
+  // Auto-refresh dashboard every 1 minute
   useEffect(() => {
     const interval = setInterval(() => {
       console.log('Auto-refreshing dashboard...');
       fetchDashboardData();
-    }, 10000); // 10 seconds
+    }, 60000); // 1 minute (60,000 ms)
 
     return () => clearInterval(interval);
   }, []);
@@ -64,7 +64,7 @@ export default function Dashboard() {
         setCollectionStats(response.data.collection);
         setCustomerStats(response.data.customers);
         console.log('Dashboard loaded successfully');
-        
+
         // Show refresh notification if it was a manual refresh
         if (refreshing) {
           console.log('Dashboard refreshed with latest data');

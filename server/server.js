@@ -5,12 +5,12 @@ import { connectDB } from './api/db.js';
 import authRoutes from './routes/auth.js';
 import customerRoutes from './routes/customers.js';
 import reminderRoutes from './routes/reminders.js';
-import creditRoutes from './routes/credits.js'; 
-import servicesRoutes from './routes/services.js';  
+import creditRoutes from './routes/credits.js';
+import servicesRoutes from './routes/services.js';
 import inventoryRoutes from './routes/inventory.js';
 import vendorRoutes from './routes/vendors.js';
 import reportRoutes from './routes/reports.js';
-import salesRoutes from './routes/sales.js'; 
+import salesRoutes from './routes/sales.js';
 import dashboardRoutes from './routes/dashboard.js';
 import topbarRoutes from './routes/topbar.js';
 
@@ -19,16 +19,29 @@ dotenv.config();
 const app = express();
 const PORT = process.env.PORT || 5000;
 
-// CORS Configuration - SUPPORTS PORT 8080
-app.use(cors({
-  origin: [
+// CORS Configuration - Supports environment-based origins
+const allowedOrigins = process.env.ALLOWED_ORIGINS
+  ? process.env.ALLOWED_ORIGINS.split(',')
+  : [
     'http://localhost:5173',
     'http://localhost:3000',
     'http://localhost:8080',
     'http://127.0.0.1:5173',
     'http://127.0.0.1:3000',
     'http://127.0.0.1:8080'
-  ],
+  ];
+
+app.use(cors({
+  origin: (origin, callback) => {
+    // Allow requests with no origin (like mobile apps or curl requests)
+    if (!origin) return callback(null, true);
+    if (allowedOrigins.indexOf(origin) !== -1 || allowedOrigins.includes('*')) {
+      callback(null, true);
+    } else {
+      console.log('❌ CORS Blocked Origin:', origin);
+      callback(new Error('Not allowed by CORS'));
+    }
+  },
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization']
@@ -50,7 +63,7 @@ await connectDB();
 
 // Health check - BEFORE routes (no auth required)
 app.get('/api/health', (req, res) => {
-  res.json({ 
+  res.json({
     status: 'Backend is running!',
     timestamp: new Date().toISOString(),
     uptime: process.uptime(),
@@ -62,7 +75,7 @@ app.get('/api/health', (req, res) => {
 app.use('/api/auth', authRoutes);
 app.use('/api/customers', customerRoutes);
 app.use('/api/reminders', reminderRoutes);
-app.use('/api/credits', creditRoutes); 
+app.use('/api/credits', creditRoutes);
 app.use('/api/services', servicesRoutes);
 app.use('/api/inventory', inventoryRoutes);
 app.use('/api/vendors', vendorRoutes);
@@ -87,9 +100,9 @@ app.get('/', (req, res) => {
       services: '/api/services',
       inventory: '/api/inventory',
       vendors: '/api/vendors',
-      reports: '/api/reports',  
+      reports: '/api/reports',
       sales: '/api/sales',
-      topbar:'/api/topbar'
+      topbar: '/api/topbar'
     }
   });
 });
@@ -97,33 +110,33 @@ app.get('/', (req, res) => {
 // 404 handler
 app.use((req, res) => {
   console.log('❌ 404 Not Found:', req.method, req.path);
-  res.status(404).json({ 
+  res.status(404).json({
     message: 'Route not found',
-    path: req.path 
+    path: req.path
   });
 });
 
 // Error handling middleware
 app.use((err, req, res, next) => {
   console.error('💥 Server Error:', err);
-  
+
   // Handle specific error types
   if (err.name === 'ValidationError') {
-    return res.status(400).json({ 
-      message: 'Validation error', 
-      error: err.message 
+    return res.status(400).json({
+      message: 'Validation error',
+      error: err.message
     });
   }
-  
+
   if (err.name === 'UnauthorizedError') {
-    return res.status(401).json({ 
-      message: 'Unauthorized', 
-      error: err.message 
+    return res.status(401).json({
+      message: 'Unauthorized',
+      error: err.message
     });
   }
 
   // Generic error response
-  res.status(err.status || 500).json({ 
+  res.status(err.status || 500).json({
     message: err.message || 'Server error',
     ...(process.env.NODE_ENV === 'development' && { stack: err.stack })
   });

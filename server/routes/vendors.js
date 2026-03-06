@@ -1,6 +1,6 @@
 // FILE: server/routes/vendors.js
 import express from 'express';
-import { getDatabase } from '../api/db.js';
+import { getDatabase, getUserQuery } from '../api/db.js';
 import { ObjectId } from 'mongodb';
 import { authenticateToken } from '../middleware/auth.js';
 
@@ -16,15 +16,17 @@ router.get('/', async (req, res) => {
   console.log('🔥 GET /api/vendors');
   try {
     const { search, isActive } = req.query;
+    const userIdStr = req.user.userId;
+    const userId = ObjectId.isValid(userIdStr) ? new ObjectId(userIdStr) : userIdStr;
     const db = await getDatabase();
-    
-    let query = {};
-    
+
+    let query = { ...getUserQuery(req) };
+
     // Filter by active status
     if (isActive !== undefined) {
       query.isActive = isActive === 'true';
     }
-    
+
     // Search by vendor name, code, or phone
     if (search) {
       query.$or = [
@@ -33,14 +35,14 @@ router.get('/', async (req, res) => {
         { phone: { $regex: search, $options: 'i' } }
       ];
     }
-    
+
     const vendorsList = await db.collection('vendors')
       .find(query)
       .sort({ vendorName: 1 })
       .toArray();
-    
+
     console.log(`✅ Found ${vendorsList.length} vendors`);
-    
+
     res.json({
       success: true,
       data: vendorsList,
@@ -63,28 +65,31 @@ router.get('/:id', async (req, res) => {
   console.log('🔥 GET /api/vendors/:id');
   try {
     const { id } = req.params;
-    
+
     if (!ObjectId.isValid(id)) {
       return res.status(400).json({
         success: false,
         message: 'Invalid vendor ID'
       });
     }
-    
+
+    const userIdStr = req.user.userId;
+    const userId = ObjectId.isValid(userIdStr) ? new ObjectId(userIdStr) : userIdStr;
     const db = await getDatabase();
     const vendor = await db.collection('vendors').findOne({
-      _id: new ObjectId(id)
+      _id: new ObjectId(id),
+      ...getUserQuery(req)
     });
-    
+
     if (!vendor) {
       return res.status(404).json({
         success: false,
         message: 'Vendor not found'
       });
     }
-    
+
     console.log('✅ Vendor found:', vendor.vendorName);
-    
+
     res.json({
       success: true,
       data: vendor
@@ -106,9 +111,9 @@ router.post('/', async (req, res) => {
   console.log('🔥 POST /api/vendors');
   try {
     const { vendorName, vendorCode, contactPerson, email, phone, alternatePhone, address, city, state, pincode, paymentTerms, isActive } = req.body;
-    
+
     console.log('📝 Creating vendor:', { vendorName, vendorCode, phone });
-    
+
     // Validate required fields
     if (!vendorName || !vendorCode || !phone) {
       return res.status(400).json({
@@ -116,24 +121,28 @@ router.post('/', async (req, res) => {
         message: 'Missing required fields: vendorName, vendorCode, phone'
       });
     }
-    
+
     const db = await getDatabase();
+    const userIdStr = req.user.userId;
+    const userId = ObjectId.isValid(userIdStr) ? new ObjectId(userIdStr) : userIdStr;
     const codeUpper = vendorCode.toUpperCase().trim();
-    
+
     // Check for duplicate code
     const existing = await db.collection('vendors').findOne({
-      vendorCode: codeUpper
+      vendorCode: codeUpper,
+      ...getUserQuery(req)
     });
-    
+
     if (existing) {
       return res.status(400).json({
         success: false,
         message: `Vendor code '${codeUpper}' already exists`
       });
     }
-    
+
     // Create new vendor
     const newVendor = {
+      userId: userId,
       vendorName: vendorName.trim(),
       vendorCode: codeUpper,
       contactPerson: contactPerson?.trim() || '',
@@ -149,13 +158,13 @@ router.post('/', async (req, res) => {
       createdAt: new Date(),
       updatedAt: new Date()
     };
-    
+
     const result = await db.collection('vendors').insertOne(newVendor);
-    
+
     newVendor._id = result.insertedId;
-    
+
     console.log('✅ Vendor created:', result.insertedId);
-    
+
     res.status(201).json({
       success: true,
       message: 'Vendor added successfully',
@@ -179,35 +188,38 @@ router.put('/:id', async (req, res) => {
   try {
     const { id } = req.params;
     const { vendorName, vendorCode, contactPerson, email, phone, alternatePhone, address, city, state, pincode, paymentTerms, isActive } = req.body;
-    
+
     if (!ObjectId.isValid(id)) {
       return res.status(400).json({
         success: false,
         message: 'Invalid vendor ID'
       });
     }
-    
+
     const db = await getDatabase();
-    
+    const userId = new ObjectId(req.user.userId);
+
     // Check if vendor exists
     const vendor = await db.collection('vendors').findOne({
-      _id: new ObjectId(id)
+      _id: new ObjectId(id),
+      ...getUserQuery(req)
     });
-    
+
     if (!vendor) {
       return res.status(404).json({
         success: false,
         message: 'Vendor not found'
       });
     }
-    
+
     // Check for duplicate code if code is being changed
     if (vendorCode && vendorCode.toUpperCase().trim() !== vendor.vendorCode) {
       const existing = await db.collection('vendors').findOne({
         vendorCode: vendorCode.toUpperCase().trim(),
-        _id: { $ne: new ObjectId(id) }
+        _id: { $ne: new ObjectId(id) },
+        ...getUserQuery(req)
       });
-      
+
       if (existing) {
         return res.status(400).json({
           success: false,
@@ -215,12 +227,12 @@ router.put('/:id', async (req, res) => {
         });
       }
     }
-    
+
     // Build update object
     const updateData = {
       updatedAt: new Date()
     };
-    
+
     if (vendorName !== undefined) updateData.vendorName = vendorName.trim();
     if (vendorCode !== undefined) updateData.vendorCode = vendorCode.toUpperCase().trim();
     if (contactPerson !== undefined) updateData.contactPerson = contactPerson.trim();
@@ -233,27 +245,28 @@ router.put('/:id', async (req, res) => {
     if (pincode !== undefined) updateData.pincode = pincode.trim();
     if (paymentTerms !== undefined) updateData.paymentTerms = paymentTerms;
     if (isActive !== undefined) updateData.isActive = isActive;
-    
+
     // Update vendor
     const result = await db.collection('vendors').updateOne(
-      { _id: new ObjectId(id) },
+      { _id: new ObjectId(id), ...getUserQuery(req) },
       { $set: updateData }
     );
-    
+
     if (result.matchedCount === 0) {
       return res.status(404).json({
         success: false,
         message: 'Vendor not found'
       });
     }
-    
+
     // Fetch updated vendor
     const updatedVendor = await db.collection('vendors').findOne({
-      _id: new ObjectId(id)
+      _id: new ObjectId(id),
+      ...getUserQuery(req)
     });
-    
+
     console.log('✅ Vendor updated:', id);
-    
+
     res.json({
       success: true,
       message: 'Vendor updated successfully',
@@ -276,42 +289,42 @@ router.delete('/:id', async (req, res) => {
   console.log('🔥 DELETE /api/vendors/:id');
   try {
     const { id } = req.params;
-    
+
     if (!ObjectId.isValid(id)) {
       return res.status(400).json({
         success: false,
         message: 'Invalid vendor ID'
       });
     }
-    
+
     const db = await getDatabase();
-    
+    const userId = new ObjectId(req.user.userId);
+
     // Check if vendor exists
     const vendor = await db.collection('vendors').findOne({
-      _id: new ObjectId(id)
+      _id: new ObjectId(id),
+      ...getUserQuery(req)
     });
-    
+
     if (!vendor) {
       return res.status(404).json({
         success: false,
         message: 'Vendor not found'
       });
     }
-    
+
     // Delete vendor
-    const result = await db.collection('vendors').deleteOne({
-      _id: new ObjectId(id)
-    });
-    
+    const result = await db.collection('vendors').deleteOne({ _id: new ObjectId(id), ...getUserQuery(req) });
+
     if (result.deletedCount === 0) {
       return res.status(404).json({
         success: false,
         message: 'Vendor not found'
       });
     }
-    
+
     console.log('✅ Vendor deleted:', id);
-    
+
     res.json({
       success: true,
       message: 'Vendor deleted successfully'
@@ -333,10 +346,12 @@ router.get('/search/:query', async (req, res) => {
   console.log('🔥 GET /api/vendors/search/:query');
   try {
     const { query } = req.params;
+    const userId = new ObjectId(req.user.userId);
     const db = await getDatabase();
-    
+
     const results = await db.collection('vendors')
       .find({
+        ...getUserQuery(req),
         $or: [
           { vendorName: { $regex: query, $options: 'i' } },
           { vendorCode: { $regex: query, $options: 'i' } },
@@ -344,9 +359,9 @@ router.get('/search/:query', async (req, res) => {
         ]
       })
       .toArray();
-    
+
     console.log(`✅ Found ${results.length} vendors`);
-    
+
     res.json({
       success: true,
       data: results,

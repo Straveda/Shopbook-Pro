@@ -1,11 +1,46 @@
 import api from './api';
 
+export interface SaleItem {
+  id: string;
+  itemName: string;
+  itemCode: string;
+  quantity: number;
+  price: number;
+  total: number;
+  unit: string;
+}
+
+export interface Sale {
+  _id: string;
+  saleNumber: string;
+  customerId?: string;
+  customerName: string;
+  saleDate: string;
+  items: SaleItem[];
+  totalAmount: number;
+  paidAmount: number;
+  balanceAmount: number;
+  outstandingAmount: number;
+  status: 'paid' | 'partial' | 'unpaid';
+  notes?: string;
+  isWalkIn: boolean;
+  createdAt?: string;
+  updatedAt?: string;
+  isLedgerBill?: boolean;
+}
+
+export interface SalesResponse {
+  success: boolean;
+  data?: Sale | Sale[] | any;
+  message?: string;
+}
+
 const salesService = {
   // Get all sales
-  getAllSales: async () => {
+  getAllSales: async (): Promise<SalesResponse> => {
     try {
-      const response = await api.get('/sales');
-      return response.data;
+      const response = await api.get<SalesResponse>('/sales');
+      return response.data || { success: true, data: [] };
     } catch (error: any) {
       console.error('Error fetching sales:', error);
       return {
@@ -17,10 +52,10 @@ const salesService = {
   },
 
   // Get single sale
-  getSaleById: async (id: string) => {
+  getSaleById: async (id: string): Promise<SalesResponse> => {
     try {
-      const response = await api.get(`/sales/${id}`);
-      return response.data;
+      const response = await api.get<SalesResponse>(`/sales/${id}`);
+      return response.data || { success: false, message: 'No data received' };
     } catch (error: any) {
       console.error('Error fetching sale:', error);
       return {
@@ -31,10 +66,10 @@ const salesService = {
   },
 
   // Create sale (registered customer)
-  createSale: async (data: any) => {
+  createSale: async (data: Partial<Sale>): Promise<SalesResponse> => {
     try {
-      const response = await api.post('/sales', data);
-      return response.data;
+      const response = await api.post<SalesResponse>('/sales', data);
+      return response.data || { success: true };
     } catch (error: any) {
       console.error('Error creating sale:', error);
       return {
@@ -45,10 +80,10 @@ const salesService = {
   },
 
   // ✅ NEW: Create walk-in sale (no customer linkage)
-  createWalkInSale: async (data: any) => {
+  createWalkInSale: async (data: Partial<Sale>): Promise<SalesResponse> => {
     try {
-      const response = await api.post('/sales/walk-in', data);
-      return response.data;
+      const response = await api.post<SalesResponse>('/sales/walk-in', data);
+      return response.data || { success: true };
     } catch (error: any) {
       console.error('Error creating walk-in sale:', error);
       return {
@@ -59,10 +94,10 @@ const salesService = {
   },
 
   // Record payment on sale
-  recordPayment: async (id: string, paymentData: any) => {
+  recordPayment: async (id: string, paymentData: { amount: number; paymentMode: string; remarks?: string }): Promise<SalesResponse> => {
     try {
-      const response = await api.post(`/sales/${id}/payment`, paymentData);
-      return response.data;
+      const response = await api.post<SalesResponse>(`/sales/${id}/payment`, paymentData);
+      return response.data || { success: true };
     } catch (error: any) {
       console.error('Error recording payment:', error);
       return {
@@ -73,10 +108,10 @@ const salesService = {
   },
 
   // Delete sale
-  deleteSale: async (id: string) => {
+  deleteSale: async (id: string): Promise<SalesResponse> => {
     try {
-      const response = await api.delete(`/sales/${id}`);
-      return response.data;
+      const response = await api.delete<SalesResponse>(`/sales/${id}`);
+      return response.data || { success: true };
     } catch (error: any) {
       console.error('Error deleting sale:', error);
       return {
@@ -87,10 +122,10 @@ const salesService = {
   },
 
   // Get customer sales
-  getCustomerSales: async (customerId: string) => {
+  getCustomerSales: async (customerId: string): Promise<SalesResponse> => {
     try {
-      const response = await api.get(`/sales/customer/${customerId}`);
-      return response.data;
+      const response = await api.get<SalesResponse>(`/sales/customer/${customerId}`);
+      return response.data || { success: true, data: [] };
     } catch (error: any) {
       console.error('Error fetching customer sales:', error);
       return {
@@ -102,10 +137,10 @@ const salesService = {
   },
 
   // Get sales statistics
-  getSalesStats: async () => {
+  getSalesStats: async (): Promise<SalesResponse> => {
     try {
-      const response = await api.get('/sales/stats/summary');
-      return response.data;
+      const response = await api.get<SalesResponse>('/sales/stats/summary');
+      return response.data || { success: false, message: 'No data received' };
     } catch (error: any) {
       console.error('Error fetching sales stats:', error);
       return {

@@ -11,7 +11,7 @@ export function LoginPage() {
   const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState('');
-  const [messageType, setMessageType] = useState<'success' | 'error'>('');
+  const [messageType, setMessageType] = useState<'success' | 'error' | ''>('');
 
   // Prevent body scroll
   React.useEffect(() => {
@@ -27,7 +27,7 @@ export function LoginPage() {
     setMessage('');
 
     try {
-      const response = await fetch(`${import.meta.env.VITE_API_URL}/auth/login`,{
+      const response = await fetch(`${import.meta.env.VITE_API_URL}/auth/login`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -42,7 +42,7 @@ export function LoginPage() {
         setMessage('Login successful! Redirecting...');
         localStorage.setItem('token', data.token);
         localStorage.setItem('user', JSON.stringify(data.user));
-        
+
         setTimeout(() => {
           navigate('/dashboard');
         }, 1500);
@@ -78,11 +78,10 @@ export function LoginPage() {
 
         <CardContent>
           {message && (
-            <div className={`mb-4 p-3 rounded-lg flex items-start gap-2 ${
-              messageType === 'success' 
-                ? 'bg-green-50 border border-green-200' 
-                : 'bg-red-50 border border-red-200'
-            }`}>
+            <div className={`mb-4 p-3 rounded-lg flex items-start gap-2 ${messageType === 'success'
+              ? 'bg-green-50 border border-green-200'
+              : 'bg-red-50 border border-red-200'
+              }`}>
               {messageType === 'success' ? (
                 <CheckCircle className="w-5 h-5 text-green-600 flex-shrink-0 mt-0.5" />
               ) : (
@@ -157,18 +156,6 @@ export function LoginPage() {
               )}
             </button>
           </form>
-
-          <div className="mt-4 text-center pb-2">
-            <p className="text-sm text-gray-600">
-              Don't have an account?{' '}
-              <button
-                onClick={() => navigate('/signup')}
-                className="text-teal-600 hover:text-teal-700 font-semibold transition"
-              >
-                Sign up
-              </button>
-            </p>
-          </div>
 
         </CardContent>
       </Card>

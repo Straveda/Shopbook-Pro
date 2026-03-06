@@ -73,14 +73,16 @@ export function ReceivePaymentDialog({
       let endpoint = "";
       let payload: any = {
         amount: paymentAmount,
-        description: `Payment received${note ? ` - ${note}` : ""}`,
       };
 
       if (customer._id) {
-        endpoint = `/customers/${customer._id}/credit`;
+        endpoint = `/customers/${customer._id}/receive-payment`;
+        payload.paymentMode = paymentMethod;
+        payload.remarks = note;
       } else if (creditId) {
         endpoint = `/credits/${creditId}/payment`;
         payload.paymentMethod = paymentMethod;
+        payload.note = note;
       } else {
         throw new Error("No customer or credit ID available");
       }
@@ -93,7 +95,7 @@ export function ReceivePaymentDialog({
         setPaymentMethod("cash");
         setNote("");
         onOpenChange(false);
-        
+
         if (onPaymentRecorded) {
           onPaymentRecorded();
         }
@@ -183,8 +185,8 @@ export function ReceivePaymentDialog({
           </div>
 
           <DialogFooter className="gap-3 sm:gap-3">
-            <Button 
-              variant="outline" 
+            <Button
+              variant="outline"
               onClick={() => onOpenChange(false)}
               disabled={loading}
               type="button"

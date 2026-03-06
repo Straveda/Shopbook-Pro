@@ -1,6 +1,6 @@
 // FILE: routes/credits.js (CREDIT BOOK - COMPLETE & ADAPTED)
 import express from 'express';
-import { getDatabase } from '../api/db.js';
+import { getDatabase, getUserQuery } from '../api/db.js';
 import { ObjectId } from 'mongodb';
 import { authenticateToken } from '../middleware/auth.js';
 
@@ -24,8 +24,10 @@ router.get('/', async (req, res) => {
       limit = 50
     } = req.query;
 
+    const userIdStr = req.user.userId;
+    const userId = ObjectId.isValid(userIdStr) ? new ObjectId(userIdStr) : userIdStr;
     const db = await getDatabase();
-    const query = { userId: req.user.userId, isActive: true };
+    const query = { ...getUserQuery(req), isActive: true };
 
     // ðŸ” Search by customer name or phone
     if (search) {
@@ -58,7 +60,7 @@ router.get('/', async (req, res) => {
     }
 
     const skip = (parseInt(page) - 1) * parseInt(limit);
-    
+
     const [credits, total] = await Promise.all([
       db.collection('credits')
         .find(query)
@@ -71,7 +73,7 @@ router.get('/', async (req, res) => {
 
     // Calculate days overdue for each credit
     const creditsWithOverdue = credits.map(credit => {
-      const daysOverdue = credit.dueDate 
+      const daysOverdue = credit.dueDate
         ? Math.max(0, Math.floor((new Date() - new Date(credit.dueDate)) / (1000 * 60 * 60 * 24)))
         : 0;
       return { ...credit, daysOverdue };
@@ -100,23 +102,121 @@ router.get('/', async (req, res) => {
 });
 
 // ============================================
+// SEND BULK REMINDERS  ← Must be BEFORE /:id routes
+// ============================================
+router.post('/reminders/bulk', async (req, res) => {
+  try {
+    const { filter, channel = 'whatsapp' } = req.body;
+
+    console.log('📨 Bulk reminder request:', { filter, channel });
+
+    const db = await getDatabase();
+
+    // ✅ Query CUSTOMERS collection (this is where Credits.tsx stores data via /customers/:id/debit)
+    const customerQuery = {
+      ...getUserQuery(req),
+      $or: [
+        { outstanding: { $gt: 0 } },
+        { outstandingAmount: { $gt: 0 } }
+      ]
+    };
+
+    // Filter only overdue customers if specified
+    if (filter === 'overdue') {
+      customerQuery.dueDate = { $lt: new Date() };
+    }
+
+    const customers = await db.collection('customers').find(customerQuery).toArray();
+
+    console.log(`📋 Found ${customers.length} customers with outstanding balance`);
+
+    if (customers.length === 0) {
+      return res.json({
+        success: true,
+        message: 'No customers found with outstanding balance',
+        count: 0,
+        customers: []
+      });
+    }
+
+    // ✅ Build per-customer reminder messages
+    const now = new Date();
+    const customersWithMessages = customers.map(customer => {
+      const balance = customer.outstanding || customer.outstandingAmount || 0;
+      const dueDateStr = customer.dueDate
+        ? new Date(customer.dueDate).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })
+        : 'Not set';
+      const message = `Hi ${customer.name}, this is a payment reminder. You have an outstanding balance of Rs.${balance} for your recent credit. Due date: ${dueDateStr}. Please make the payment at your earliest convenience. Thank you!`;
+      return {
+        customerId: customer._id,
+        name: customer.name,
+        phone: customer.phone,
+        balance,
+        dueDate: customer.dueDate,
+        message
+      };
+    });
+
+    // ✅ Record reminder timestamp on each customer document
+    const reminder = {
+      sentAt: now,
+      channel: channel,
+      status: 'sent',
+      message: `Bulk reminder via ${channel}`
+    };
+
+    const bulkOps = customers.map(customer => ({
+      updateOne: {
+        filter: { _id: customer._id },
+        update: {
+          $push: { reminders: reminder },
+          $set: { lastReminderSent: now, updatedAt: now }
+        }
+      }
+    }));
+
+    await db.collection('customers').bulkWrite(bulkOps);
+
+    console.log('✅ Bulk reminders recorded for', customers.length, 'customers');
+
+    res.json({
+      success: true,
+      message: `Reminders recorded for ${customers.length} customers`,
+      count: customers.length,
+      total: customers.length,
+      customers: customersWithMessages
+    });
+  } catch (error) {
+    console.error('❌ Bulk reminders error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Server error',
+      error: error.message
+    });
+  }
+});
+
+
+// ============================================
 // GET SINGLE CREDIT BY ID
 // ============================================
 router.get('/:id', async (req, res) => {
   try {
     const { id } = req.params;
-    
+
     if (!ObjectId.isValid(id)) {
-      return res.status(400).json({ 
-        success: false, 
-        message: 'Invalid credit ID' 
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid credit ID'
       });
     }
 
+    const userIdStr = req.user.userId;
+    const userId = ObjectId.isValid(userIdStr) ? new ObjectId(userIdStr) : userIdStr;
     const db = await getDatabase();
     const credit = await db.collection('credits').findOne({
       _id: new ObjectId(id),
-      userId: req.user.userId,
+      ...getUserQuery(req),
       isActive: true
     });
 
@@ -172,12 +272,14 @@ router.post('/', async (req, res) => {
       });
     }
 
+    const userIdStr = req.user.userId;
+    const userId = ObjectId.isValid(userIdStr) ? new ObjectId(userIdStr) : userIdStr;
     const db = await getDatabase();
 
     // âœ… Fetch customer details
     const customer = await db.collection('customers').findOne({
       _id: new ObjectId(customerId),
-      userId: req.user.userId
+      ...getUserQuery(req)
     });
 
     if (!customer) {
@@ -189,7 +291,7 @@ router.post('/', async (req, res) => {
 
     // âœ… Create credit entry
     const creditData = {
-      userId: req.user.userId,
+      userId: ObjectId.isValid(req.user.userId) ? new ObjectId(req.user.userId) : req.user.userId,
       customerId: customerId,
       customerName: customer.name,
       customerPhone: customer.phone,
@@ -213,11 +315,43 @@ router.post('/', async (req, res) => {
     }
 
     const result = await db.collection('credits').insertOne(creditData);
-    console.log('âœ… Credit created:', result.insertedId);
+    console.log('✅ Credit created:', result.insertedId);
+
+    // 🔄 SYNC: Update customer outstanding balance
+    await db.collection('customers').updateOne(
+      { _id: new ObjectId(customerId), ...getUserQuery(req) },
+      {
+        $inc: {
+          outstanding: creditData.amount,
+          outstandingAmount: creditData.amount
+        },
+        $set: {
+          lastTransaction: new Date(),
+          updatedAt: new Date()
+        }
+      }
+    );
+
+    // 🔄 SYNC: Create Ledger Entry
+    const ledgerEntry = {
+      userId: ObjectId.isValid(req.user.userId) ? new ObjectId(req.user.userId) : req.user.userId,
+      customerId: new ObjectId(customerId),
+      creditId: result.insertedId,
+      date: creditData.givenOn,
+      type: 'Credit',
+      description: `Credit: ${service}${note ? ' - ' + note : ''}`,
+      debit: creditData.amount,
+      credit: 0,
+      balance: 0, // Will be calculated by aggregating if needed, or fetched from customer
+      paymentMode: '',
+      remarks: 'Automated entry from Credit Book',
+      createdAt: new Date()
+    };
+    await db.collection('ledger').insertOne(ledgerEntry);
 
     res.status(201).json({
       success: true,
-      message: 'Credit added successfully',
+      message: 'Credit added successfully and synced with ledger',
       data: { _id: result.insertedId, ...creditData }
     });
   } catch (error) {
@@ -246,10 +380,11 @@ router.put('/:id', async (req, res) => {
     }
 
     const db = await getDatabase();
+    const userId = new ObjectId(req.user.userId);
 
     const credit = await db.collection('credits').findOne({
       _id: new ObjectId(id),
-      userId: req.user.userId,
+      userId: { $in: [req.user.userId, userId] },
       isActive: true
     });
 
@@ -287,8 +422,36 @@ router.put('/:id', async (req, res) => {
       updateData.status = 'pending';
     }
 
+    // 🔄 SYNC: If amount changed, update customer'S outstanding
+    if (amount !== undefined) {
+      const amountDiff = updateData.amount - credit.amount;
+      if (amountDiff !== 0) {
+        await db.collection('customers').updateOne(
+          { _id: new ObjectId(credit.customerId), ...getUserQuery(req) },
+          {
+            $inc: {
+              outstanding: amountDiff,
+              outstandingAmount: amountDiff
+            },
+            $set: { updatedAt: new Date() }
+          }
+        );
+
+        // Update corresponding ledger entry (simplest approach: update the one linked to this creditId)
+        await db.collection('ledger').updateOne(
+          { creditId: new ObjectId(id), type: 'Credit' },
+          {
+            $set: {
+              debit: updateData.amount,
+              description: `Credit(Updated): ${updateData.service || credit.service}${updateData.note || credit.note ? ' - ' + (updateData.note || credit.note) : ''}`
+            }
+          }
+        );
+      }
+    }
+
     const result = await db.collection('credits').updateOne(
-      { _id: new ObjectId(id), userId: req.user.userId },
+      { _id: new ObjectId(id), ...getUserQuery(req) },
       { $set: updateData }
     );
 
@@ -299,11 +462,11 @@ router.put('/:id', async (req, res) => {
       });
     }
 
-    console.log('âœ… Credit updated:', id);
+    console.log('✅ Credit updated and synced:', id);
 
     res.json({
       success: true,
-      message: 'Credit updated successfully'
+      message: 'Credit updated successfully and synced'
     });
   } catch (error) {
     console.error('âŒ Update credit error:', error);
@@ -330,10 +493,12 @@ router.delete('/:id', async (req, res) => {
     }
 
     const db = await getDatabase();
+    const userIdStr = req.user.userId;
+    const userId = ObjectId.isValid(userIdStr) ? new ObjectId(userIdStr) : userIdStr;
 
     const credit = await db.collection('credits').findOne({
       _id: new ObjectId(id),
-      userId: req.user.userId,
+      ...getUserQuery(req),
       isActive: true
     });
 
@@ -344,9 +509,8 @@ router.delete('/:id', async (req, res) => {
       });
     }
 
-    // âœ… Soft delete
     const result = await db.collection('credits').updateOne(
-      { _id: new ObjectId(id), userId: req.user.userId },
+      { _id: new ObjectId(id), ...getUserQuery(req) },
       { $set: { isActive: false, updatedAt: new Date() } }
     );
 
@@ -357,11 +521,31 @@ router.delete('/:id', async (req, res) => {
       });
     }
 
-    console.log('âœ… Credit deleted:', id);
+    // 🔄 SYNC: Decrease customer outstanding by the remaining balance
+    if (credit.balance > 0) {
+      await db.collection('customers').updateOne(
+        { _id: new ObjectId(credit.customerId), ...getUserQuery(req) },
+        {
+          $inc: {
+            outstanding: -credit.balance,
+            outstandingAmount: -credit.balance
+          },
+          $set: { updatedAt: new Date() }
+        }
+      );
+    }
+
+    // 🔄 SYNC: Soft delete associated ledger entries
+    await db.collection('ledger').updateMany(
+      { creditId: new ObjectId(id) },
+      { $set: { isActive: false, description: 'DELETED: ' + credit.service } }
+    );
+
+    console.log('✅ Credit deleted and synced:', id);
 
     res.json({
       success: true,
-      message: 'Credit deleted successfully'
+      message: 'Credit deleted successfully and synced'
     });
   } catch (error) {
     console.error('âŒ Delete credit error:', error);
@@ -398,10 +582,11 @@ router.post('/:id/payment', async (req, res) => {
     }
 
     const db = await getDatabase();
+    const userId = new ObjectId(req.user.userId);
 
     const credit = await db.collection('credits').findOne({
       _id: new ObjectId(id),
-      userId: req.user.userId,
+      userId: { $in: [req.user.userId, userId] },
       isActive: true
     });
 
@@ -432,7 +617,7 @@ router.post('/:id/payment', async (req, res) => {
     // âœ… Calculate new balance and status
     const newBalance = credit.balance - paymentAmount;
     let newStatus = 'pending';
-    
+
     if (newBalance === 0) {
       newStatus = 'cleared';
     } else if (newBalance < credit.amount) {
@@ -441,9 +626,9 @@ router.post('/:id/payment', async (req, res) => {
       newStatus = 'overdue';
     }
 
-    // âœ… Update credit with payment
+    // ✅ Update credit with payment
     const result = await db.collection('credits').updateOne(
-      { _id: new ObjectId(id), userId: req.user.userId },
+      { _id: new ObjectId(id), ...getUserQuery(req) },
       {
         $push: { payments: payment },
         $set: {
@@ -461,11 +646,54 @@ router.post('/:id/payment', async (req, res) => {
       });
     }
 
-    console.log('âœ… Payment recorded:', { newBalance, newStatus });
+    // 🔄 SYNC: Update customer outstanding balance
+    await db.collection('customers').updateOne(
+      { _id: new ObjectId(credit.customerId), ...getUserQuery(req) },
+      {
+        $inc: {
+          outstanding: -paymentAmount,
+          outstandingAmount: -paymentAmount,
+          totalPaid: paymentAmount
+        },
+        $set: {
+          lastTransaction: new Date(),
+          updatedAt: new Date()
+        }
+      }
+    );
+
+    // 🔄 SYNC: Create Ledger Entry for the payment
+    const ledgerPaymentEntry = {
+      userId: ObjectId.isValid(req.user.userId) ? new ObjectId(req.user.userId) : req.user.userId,
+      customerId: new ObjectId(credit.customerId),
+      creditId: new ObjectId(id),
+      date: new Date(),
+      type: 'Payment',
+      description: `Payment for Credit: ${credit.service}`,
+      debit: 0,
+      credit: paymentAmount,
+      balance: newBalance,
+      paymentMode: paymentMethod || 'cash',
+      remarks: note || 'Payment recorded in Credit Book',
+      createdAt: new Date()
+    };
+    await db.collection('ledger').insertOne(ledgerPaymentEntry);
+
+    // 🔄 SYNC: Update the corresponding Ledger DEBIT entry with the paidAmount
+    // This ensures the Sales page (which looks at ledger) shows the correct balance for this bill
+    await db.collection('ledger').updateOne(
+      { creditId: new ObjectId(id), type: 'Credit' },
+      {
+        $inc: { paidAmount: paymentAmount },
+        $set: { updatedAt: new Date() }
+      }
+    );
+
+    console.log('✅ Payment recorded and synced:', { newBalance, newStatus });
 
     res.status(201).json({
       success: true,
-      message: 'Payment recorded successfully',
+      message: 'Payment recorded and synced successfully',
       data: {
         creditId: id,
         customerName: credit.customerName,
@@ -501,10 +729,11 @@ router.post('/:id/reminder', async (req, res) => {
     }
 
     const db = await getDatabase();
+    const userId = new ObjectId(req.user.userId);
 
     const credit = await db.collection('credits').findOne({
       _id: new ObjectId(id),
-      userId: req.user.userId,
+      userId: { $in: [req.user.userId, userId] },
       isActive: true
     });
 
@@ -523,7 +752,7 @@ router.post('/:id/reminder', async (req, res) => {
     }
 
     // âœ… Create reminder record
-    const reminderMessage = message || 
+    const reminderMessage = message ||
       `Payment reminder: â‚¹${credit.balance} outstanding for ${credit.service}. Due date: ${credit.dueDate ? new Date(credit.dueDate).toLocaleDateString() : 'Not set'}`;
 
     const reminder = {
@@ -535,7 +764,7 @@ router.post('/:id/reminder', async (req, res) => {
 
     // âœ… Add reminder to credit
     const result = await db.collection('credits').updateOne(
-      { _id: new ObjectId(id), userId: req.user.userId },
+      { _id: new ObjectId(id), userId: { $in: [req.user.userId, userId] } },
       {
         $push: { reminders: reminder },
         $set: { updatedAt: new Date() }
@@ -572,74 +801,8 @@ router.post('/:id/reminder', async (req, res) => {
   }
 });
 
-// ============================================
-// SEND BULK REMINDERS
-// ============================================
-router.post('/reminders/bulk', async (req, res) => {
-  try {
-    const { filter } = req.body;
+// (Bulk reminders route is registered above, before /:id routes — see line ~107)
 
-    console.log('ðŸ“¨ Bulk reminder request:', filter);
-
-    const db = await getDatabase();
-    const query = { 
-      userId: req.user.userId, 
-      isActive: true, 
-      balance: { $gt: 0 } 
-    };
-
-    // âœ… Filter by overdue if specified
-    if (filter === 'overdue') {
-      query.dueDate = { $lt: new Date() };
-    }
-
-    const credits = await db.collection('credits').find(query).toArray();
-
-    if (credits.length === 0) {
-      return res.json({
-        success: true,
-        message: 'No credits found to send reminders',
-        count: 0
-      });
-    }
-
-    // âœ… Send reminders to all matching credits
-    const reminder = {
-      sentAt: new Date(),
-      channel: 'whatsapp',
-      status: 'sent',
-      message: 'Payment reminder - bulk sent'
-    };
-
-    const bulkOps = credits.map(credit => ({
-      updateOne: {
-        filter: { _id: credit._id },
-        update: {
-          $push: { reminders: reminder },
-          $set: { updatedAt: new Date() }
-        }
-      }
-    }));
-
-    const result = await db.collection('credits').bulkWrite(bulkOps);
-
-    console.log('âœ… Bulk reminders sent:', result.modifiedCount);
-
-    res.json({
-      success: true,
-      message: `Reminders sent to ${result.modifiedCount} customers`,
-      count: result.modifiedCount,
-      total: credits.length
-    });
-  } catch (error) {
-    console.error('âŒ Bulk reminders error:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Server error',
-      error: error.message
-    });
-  }
-});
 
 // ============================================
 // GET SUMMARY STATISTICS
@@ -648,10 +811,12 @@ router.get('/summary/stats', async (req, res) => {
   try {
     const { customerId, startDate, endDate } = req.query;
 
+    const userIdStr = req.user.userId;
+    const userId = ObjectId.isValid(userIdStr) ? new ObjectId(userIdStr) : userIdStr;
     const db = await getDatabase();
-    const matchQuery = { 
-      userId: req.user.userId, 
-      isActive: true 
+    const matchQuery = {
+      ...getUserQuery(req),
+      isActive: true
     };
 
     if (customerId) matchQuery.customerId = customerId;
@@ -672,7 +837,7 @@ router.get('/summary/stats', async (req, res) => {
 
       if (credit.balance > 0) acc.activeCredits += 1;
       if (credit.balance === 0) acc.clearedCredits += 1;
-      
+
       if (credit.dueDate && new Date() > new Date(credit.dueDate) && credit.balance > 0) {
         acc.overdueAmount += credit.balance;
         acc.overdueCount += 1;
@@ -713,12 +878,13 @@ router.get('/customer/:customerId', async (req, res) => {
   try {
     const { customerId } = req.params;
 
+    const userId = new ObjectId(req.user.userId);
     const db = await getDatabase();
     const credits = await db.collection('credits')
-      .find({ 
-        userId: req.user.userId,
+      .find({
+        userId: { $in: [req.user.userId, userId] },
         customerId: customerId,
-        isActive: true 
+        isActive: true
       })
       .sort({ givenOn: -1 })
       .toArray();
@@ -772,11 +938,12 @@ router.get('/:id/payments', async (req, res) => {
       });
     }
 
+    const userId = new ObjectId(req.user.userId);
     const db = await getDatabase();
     const credit = await db.collection('credits').findOne(
       {
         _id: new ObjectId(id),
-        userId: req.user.userId,
+        userId: { $in: [req.user.userId, userId] },
         isActive: true
       },
       { projection: { payments: 1, customerName: 1, service: 1 } }

@@ -1,9 +1,9 @@
 import { LayoutDashboard, Users, CreditCard, Bell, ShoppingBag, Settings } from "lucide-react";
 import { NavLink } from "./NavLink";
 import { Briefcase } from "lucide-react";
-import { Package } from "lucide-react"; 
-import { Building } from "lucide-react"; 
-import { BarChart3 } from "lucide-react"; 
+import { Package } from "lucide-react";
+import { Building } from "lucide-react";
+import { BarChart3 } from "lucide-react";
 import {
   Sidebar,
   SidebarContent,
@@ -17,11 +17,11 @@ import {
 } from "@/components/ui/sidebar";
 
 const mainItems = [
-  { title: "Dashboard", url: "/", icon: LayoutDashboard },
+  { title: "Dashboard", url: "/dashboard", icon: LayoutDashboard },
   { title: "Customers", url: "/customers", icon: Users },
   { title: "Credit Book", url: "/credits", icon: CreditCard },
   { title: "Reminders", url: "/reminders", icon: Bell },
-  { title: "Services", url: "/services", icon: Briefcase }, 
+  { title: "Services", url: "/services", icon: Briefcase },
   { title: "Inventory", url: "/inventory", icon: Package },
   { title: "Vendors", url: "/vendors", icon: Building },
   { title: "Reports", url: "/reports", icon: BarChart3 },

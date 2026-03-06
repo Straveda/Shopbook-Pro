@@ -1,6 +1,6 @@
 // FILE: server/routes/dashboard.js - COMPLETE FIX
 import express from 'express';
-import { getDatabase } from '../api/db.js';
+import { getDatabase, getUserQuery } from '../api/db.js';
 import { ObjectId } from 'mongodb';
 import { authenticateToken } from '../middleware/auth.js';
 
@@ -13,17 +13,17 @@ router.use(authenticateToken);
 // ============================================
 router.get('/summary', async (req, res) => {
   console.log('Dashboard summary request');
-  
+
   try {
     const db = await getDatabase();
-    const userId = req.user.userId;
+    const userFilter = getUserQuery(req);
 
     const [customers, inventory, services, sales, ledger] = await Promise.all([
-      db.collection('customers').find({}).toArray(),
-      db.collection('inventory').find({}).toArray(),
-      db.collection('services').find({ isActive: true }).toArray(),
-      db.collection('sales').find({}).toArray(),
-      db.collection('ledger').find({}).toArray()
+      db.collection('customers').find(userFilter).toArray(),
+      db.collection('inventory').find(userFilter).toArray(),
+      db.collection('services').find({ ...userFilter, isActive: true }).toArray(),
+      db.collection('sales').find(userFilter).toArray(),
+      db.collection('ledger').find(userFilter).toArray()
     ]);
 
     console.log('Fetched data - Customers:', customers.length, 'Sales:', sales.length, 'Ledger:', ledger.length);
@@ -32,7 +32,7 @@ router.get('/summary', async (req, res) => {
     // FIXED: Use ledger Payment entries instead of sales.paidAmount
     const today = new Date();
     today.setHours(0, 0, 0, 0);
-    
+
     const tomorrow = new Date(today);
     tomorrow.setDate(tomorrow.getDate() + 1);
 
@@ -42,43 +42,51 @@ router.get('/summary', async (req, res) => {
       const entryDate = new Date(entry.date);
       return entryDate >= today && entryDate < tomorrow;
     });
-    
+
     const todaysCollection = todaysPayments.reduce((sum, entry) => sum + (entry.credit || 0), 0);
     console.log('Today payments:', todaysPayments.length, 'Amount:', todaysCollection);
 
     // ========== TOTAL OUTSTANDING ==========
-    const totalOutstanding = customers.reduce((sum, c) => sum + (c.outstanding || c.outstandingAmount || 0), 0);
+    const totalOutstanding = customers.reduce((sum, c) => sum + (c.outstandingAmount || 0), 0);
     console.log('Total outstanding:', totalOutstanding);
 
     // ========== OVERDUE PAYMENTS ==========
     // SIMPLIFIED: Any customer with outstanding balance is considered overdue
     // (since they have credit given and haven't paid yet)
     const overdueCustomers = customers.filter(c => {
-      const outstanding = c.outstanding || c.outstandingAmount || 0;
+      const outstanding = c.outstandingAmount || 0;
       return outstanding > 0;  // Simple: if they owe money, they're overdue
     });
 
-    const overdueAmount = overdueCustomers.reduce((sum, c) => sum + (c.outstanding || c.outstandingAmount || 0), 0);
+    const overdueAmount = overdueCustomers.reduce((sum, c) => sum + (c.outstandingAmount || 0), 0);
     console.log('Overdue customers:', overdueCustomers.length, 'Amount:', overdueAmount);
 
     // ========== LOW STOCK ITEMS ==========
     const lowStockItems = inventory.filter(item => item.quantity <= item.reorderLevel).length;
 
+    // Filter ledger for bills (Credit entries without sale reference)
+    const ledgerBills = ledger.filter(entry =>
+      entry.type === 'Credit' && !entry.saleReference && (entry.debit > 0)
+    );
+
+    const totalRevenue = sales.reduce((sum, sale) => sum + (sale.totalAmount || 0), 0) +
+      ledgerBills.reduce((sum, bill) => sum + (bill.debit || 0), 0);
+
     // ========== SUMMARY STATS ==========
     const summaryStats = {
       totalOutstanding: totalOutstanding,
       overdueAmount: overdueAmount,
-      activeCredits: customers.filter(c => (c.outstanding || c.outstandingAmount || 0) > 0).length,
+      activeCredits: customers.filter(c => (c.outstandingAmount || 0) > 0).length,
       todaysCollection: todaysCollection,
       totalCustomers: customers.length,
       totalServices: services.length,
       lowStockItems: lowStockItems,
       totalInventoryValue: inventory.reduce((sum, item) => sum + ((item.quantity || 0) * (item.purchasePrice || 0)), 0),
-      totalSales: sales.length,
+      totalSales: sales.length + ledgerBills.length,
       totalPaidAmount: ledger
         .filter(e => e.type === 'Payment')
         .reduce((sum, e) => sum + (e.credit || 0), 0),
-      totalRevenue: sales.reduce((sum, sale) => sum + (sale.totalAmount || 0), 0)
+      totalRevenue: totalRevenue
     };
 
     // ========== OVERDUE CUSTOMERS (TOP 4) ==========
@@ -91,7 +99,7 @@ router.get('/summary', async (req, res) => {
           _id: customer._id.toString(),
           name: customer.name,
           phone: customer.phone,
-          amount: customer.outstanding || customer.outstandingAmount || 0,
+          amount: customer.outstandingAmount || 0,
           daysOverdue: Math.max(daysOverdue, customer.dueDate ? Math.floor((new Date() - new Date(customer.dueDate)) / (1000 * 60 * 60 * 24)) : 0),
           lastTransaction: lastTx.toLocaleDateString('en-GB')
         };
@@ -177,12 +185,13 @@ router.get('/collection-stats', async (req, res) => {
 
   try {
     const db = await getDatabase();
-    const customers = await db.collection('customers').find({}).toArray();
-    const ledger = await db.collection('ledger').find({}).toArray();
+    const userFilter = getUserQuery(req);
+    const customers = await db.collection('customers').find(userFilter).toArray();
+    const ledger = await db.collection('ledger').find(userFilter).toArray();
 
-    const totalOutstanding = customers.reduce((sum, c) => sum + (c.outstanding || c.outstandingAmount || 0), 0);
+    const totalOutstanding = customers.reduce((sum, c) => sum + (c.outstandingAmount || 0), 0);
     const totalExpected = customers.reduce((sum, c) => sum + (c.creditLimit || 0), 0);
-    
+
     // FIXED: Calculate collected from ledger Payment entries
     const collected = ledger
       .filter(e => e.type === 'Payment')
@@ -219,7 +228,8 @@ router.get('/sales-trend', async (req, res) => {
 
   try {
     const db = await getDatabase();
-    const sales = await db.collection('sales').find({}).toArray();
+    const userFilter = getUserQuery(req);
+    const sales = await db.collection('sales').find(userFilter).toArray();
 
     const salesByDay = {};
     for (let i = 6; i >= 0; i--) {
@@ -267,12 +277,13 @@ router.get('/customer-stats', async (req, res) => {
 
   try {
     const db = await getDatabase();
-    const customers = await db.collection('customers').find({}).toArray();
+    const userFilter = getUserQuery(req);
+    const customers = await db.collection('customers').find(userFilter).toArray();
 
     const stats = {
       totalCustomers: customers.length,
-      withBalance: customers.filter(c => (c.outstanding || c.outstandingAmount || 0) > 0).length,
-      cleared: customers.filter(c => (c.outstanding || c.outstandingAmount || 0) === 0).length,
+      withBalance: customers.filter(c => (c.outstandingAmount || 0) > 0).length,
+      cleared: customers.filter(c => (c.outstandingAmount || 0) === 0).length,
       newCustomers: customers.filter(c => {
         const thirtyDaysAgo = new Date();
         thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
@@ -302,14 +313,15 @@ console.log('Dashboard routes loaded');
 router.get('/debug/data', async (req, res) => {
   try {
     const db = await getDatabase();
-    
-    const customers = await db.collection('customers').find({}).toArray();
-    const ledger = await db.collection('ledger').find({}).toArray();
-    const sales = await db.collection('sales').find({}).toArray();
+    const userFilter = getUserQuery(req);
 
-    const customerWithOutstanding = customers.filter(c => (c.outstanding || c.outstandingAmount || 0) > 0);
+    const customers = await db.collection('customers').find(userFilter).toArray();
+    const ledger = await db.collection('ledger').find(userFilter).toArray();
+    const sales = await db.collection('sales').find(userFilter).toArray();
+
+    const customerWithOutstanding = customers.filter(c => (c.outstandingAmount || 0) > 0);
     const paymentEntries = ledger.filter(e => e.type === 'Payment');
-    
+
     res.json({
       success: true,
       debug: {

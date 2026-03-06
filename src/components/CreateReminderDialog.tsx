@@ -19,7 +19,7 @@ import {
 } from "@/components/ui/select";
 import { toast } from "sonner";
 import { Loader2, MessageSquare, Phone } from "lucide-react";
-import reminderService from "@/services/reminderService";
+import reminderService from "@/services/ReminderService";
 import customerService from "@/services/customerService";
 
 interface CreateReminderDialogProps {
@@ -66,7 +66,7 @@ export function CreateReminderDialog({ open, onOpenChange, onSuccess }: CreateRe
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    
+
     if (!formData.customerId || !formData.message || !formData.reminderDate) {
       toast.error("Please fill all required fields");
       return;
@@ -75,7 +75,7 @@ export function CreateReminderDialog({ open, onOpenChange, onSuccess }: CreateRe
     setLoading(true);
     try {
       const selectedCustomer = customers.find(c => c._id === formData.customerId);
-      
+
       const response = await reminderService.createReminder({
         customerId: formData.customerId,
         customerName: selectedCustomer?.name,
@@ -113,7 +113,7 @@ export function CreateReminderDialog({ open, onOpenChange, onSuccess }: CreateRe
   const handleCustomerChange = (customerId: string) => {
     const customer = customers.find(c => c._id === customerId);
     if (customer) {
-      const defaultMessage = `Payment reminder: You have an outstanding balance of â‚¹${customer.outstandingAmount.toLocaleString()}. Please settle your payment at your earliest convenience. Thank you!`;
+      const defaultMessage = `Payment reminder: You have an outstanding balance of ₹${customer.outstandingAmount.toLocaleString()}. Please settle your payment at your earliest convenience. Thank you!`;
       setFormData(prev => ({
         ...prev,
         customerId,
@@ -167,7 +167,7 @@ export function CreateReminderDialog({ open, onOpenChange, onSuccess }: CreateRe
             <Label htmlFor="channel">Channel *</Label>
             <Select
               value={formData.channel}
-              onValueChange={(value: "whatsapp" | "sms") => 
+              onValueChange={(value: "whatsapp" | "sms") =>
                 setFormData(prev => ({ ...prev, channel: value }))
               }
             >
@@ -226,8 +226,8 @@ export function CreateReminderDialog({ open, onOpenChange, onSuccess }: CreateRe
             >
               Cancel
             </Button>
-            <Button 
-              type="submit" 
+            <Button
+              type="submit"
               disabled={loading || customers.length === 0}
               className="bg-teal-500 hover:bg-teal-600"
             >

@@ -1,6 +1,6 @@
 // FILE: server/routes/topbar.js - FIXED VERSION
 import express from 'express';
-import { getDatabase } from '../api/db.js';
+import { getDatabase, getUserQuery } from '../api/db.js';
 import { ObjectId } from 'mongodb';
 import { authenticateToken } from '../middleware/auth.js';
 
@@ -19,10 +19,10 @@ router.use(authenticateToken);
 router.get('/user/profile', async (req, res) => {
   console.log('🔥 GET /api/topbar/user/profile');
   console.log('User ID:', req.user.userId);
-  
+
   try {
     const db = await getDatabase();
-    
+
     // Handle both string and ObjectId formats
     let userId = req.user.userId;
     if (typeof userId === 'string' && ObjectId.isValid(userId)) {
@@ -42,7 +42,7 @@ router.get('/user/profile', async (req, res) => {
     }
 
     const { password: _, ...userWithoutPassword } = user;
-    
+
     console.log('✅ User profile fetched:', user.email);
 
     res.json({
@@ -174,10 +174,7 @@ router.get('/search', async (req, res) => {
       // Search Customers
       db.collection('customers')
         .find({
-          $or: [
-            { userId: userId },
-            { userId: userId.toString() }
-          ],
+          ...getUserQuery(req),
           $or: [
             { name: { $regex: searchQuery, $options: 'i' } },
             { phone: { $regex: searchQuery, $options: 'i' } },
@@ -195,10 +192,7 @@ router.get('/search', async (req, res) => {
       // Search Sales
       db.collection('sales')
         .find({
-          $or: [
-            { userId: userId },
-            { userId: userId.toString() }
-          ],
+          ...getUserQuery(req),
           $or: [
             { saleNumber: { $regex: searchQuery, $options: 'i' } },
             { customerName: { $regex: searchQuery, $options: 'i' } }
@@ -214,10 +208,7 @@ router.get('/search', async (req, res) => {
       // Search Invoices
       db.collection('invoices')
         .find({
-          $or: [
-            { userId: userId },
-            { userId: userId.toString() }
-          ],
+          ...getUserQuery(req),
           $or: [
             { invoiceNo: { $regex: searchQuery, $options: 'i' } },
             { customerName: { $regex: searchQuery, $options: 'i' } }
@@ -290,7 +281,7 @@ router.get('/notifications', async (req, res) => {
   try {
     const db = await getDatabase();
     let userId = req.user.userId;
-    
+
     if (typeof userId === 'string' && ObjectId.isValid(userId)) {
       userId = new ObjectId(userId);
     }
@@ -303,10 +294,7 @@ router.get('/notifications', async (req, res) => {
     // Get pending sales from today
     const pendingSales = await db.collection('sales')
       .countDocuments({
-        $or: [
-          { userId: userId },
-          { userId: userId.toString() }
-        ],
+        ...getUserQuery(req),
         status: { $in: ['unpaid', 'partial'] },
         saleDate: { $gte: today, $lt: tomorrow }
       })
@@ -318,10 +306,7 @@ router.get('/notifications', async (req, res) => {
     // Get overdue customers
     const overdueCustomers = await db.collection('customers')
       .find({
-        $or: [
-          { userId: userId },
-          { userId: userId.toString() }
-        ],
+        ...getUserQuery(req),
         outstanding: { $gt: 0 },
         dueDate: { $exists: true, $lt: today }
       })
@@ -336,6 +321,7 @@ router.get('/notifications', async (req, res) => {
     try {
       lowStockCount = await db.collection('inventory')
         .countDocuments({
+          ...getUserQuery(req),
           $expr: { $lte: ['$quantity', '$reorderLevel'] }
         });
     } catch (e) {
@@ -414,7 +400,7 @@ router.get('/notifications', async (req, res) => {
 router.post('/quick-sale', async (req, res) => {
   console.log('🔥 POST /api/topbar/quick-sale');
   console.log('Request body:', req.body);
-  
+
   try {
     const { customerName, items, totalAmount, paidAmount, notes } = req.body;
 
@@ -435,25 +421,20 @@ router.post('/quick-sale', async (req, res) => {
 
     const db = await getDatabase();
     let userId = req.user.userId;
-    
+
     if (typeof userId === 'string' && ObjectId.isValid(userId)) {
       userId = new ObjectId(userId);
     }
 
     // Generate sale number
-    const count = await db.collection('sales').countDocuments({
-      $or: [
-        { userId: userId },
-        { userId: userId.toString() }
-      ]
-    });
+    const count = await db.collection('sales').countDocuments(getUserQuery(req));
     const saleNumber = `SALE-${String(count + 1).padStart(5, '0')}`;
 
     const balanceAmount = parseFloat(totalAmount) - (parseFloat(paidAmount) || 0);
 
     // Create quick sale (walk-in)
     const saleData = {
-      userId: userId.toString(),
+      userId: ObjectId.isValid(req.user.userId) ? new ObjectId(req.user.userId) : req.user.userId,
       customerId: null,
       customerName: customerName || 'Walk-in Customer',
       saleNumber: saleNumber,
@@ -500,36 +481,21 @@ router.get('/stats/quick', async (req, res) => {
   try {
     const db = await getDatabase();
     let userId = req.user.userId;
-    
+
     if (typeof userId === 'string' && ObjectId.isValid(userId)) {
       userId = new ObjectId(userId);
     }
 
     const [customers, sales, ledger] = await Promise.all([
-      db.collection('customers').find({
-        $or: [
-          { userId: userId },
-          { userId: userId.toString() }
-        ]
-      }).toArray().catch(err => {
+      db.collection('customers').find(getUserQuery(req)).toArray().catch(err => {
         console.error('Customers query error:', err);
         return [];
       }),
-      db.collection('sales').find({
-        $or: [
-          { userId: userId },
-          { userId: userId.toString() }
-        ]
-      }).toArray().catch(err => {
+      db.collection('sales').find(getUserQuery(req)).toArray().catch(err => {
         console.error('Sales query error:', err);
         return [];
       }),
-      db.collection('ledger').find({
-        $or: [
-          { userId: userId },
-          { userId: userId.toString() }
-        ]
-      }).toArray().catch(err => {
+      db.collection('ledger').find(getUserQuery(req)).toArray().catch(err => {
         console.error('Ledger query error:', err);
         return [];
       })
