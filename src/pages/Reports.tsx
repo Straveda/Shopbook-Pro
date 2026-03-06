@@ -1,8 +1,16 @@
-// FILE: src/pages/Reports.tsx (FIXED - Error Free)
+// FILE: src/pages/Reports.tsx
 import { useState, useEffect } from "react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Loader2, Download, RefreshCw } from "lucide-react";
+import { Input } from "@/components/ui/input";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import { Loader2, Download, RefreshCw, Filter, X } from "lucide-react";
 import {
   Table,
   TableBody,
@@ -12,24 +20,9 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import reportsService from "@/services/reportsService";
-import salesService from "@/services/salesService";
 import { toast } from "sonner";
 
 type ReportTab = 'daily' | 'aging' | 'services' | 'inventory';
-
-interface SaleRecord {
-  _id: string;
-  saleNumber: string;
-  customerName: string;
-  customerId?: string;
-  totalAmount: number;
-  paidAmount: number;
-  balanceAmount?: number;
-  outstandingAmount?: number;
-  status: 'paid' | 'unpaid' | 'partial';
-  saleDate?: string;
-  createdAt: string;
-}
 
 interface StatsData {
   [key: string]: number | string;
@@ -42,6 +35,11 @@ export default function Reports() {
   const [reportData, setReportData] = useState<any[]>([]);
   const [stats, setStats] = useState<StatsData | null>(null);
 
+  // Filter state
+  const [fromDate, setFromDate] = useState("");
+  const [toDate, setToDate] = useState("");
+  const [categoryFilter, setCategoryFilter] = useState("all");
+
   const reportTabs: { id: ReportTab; label: string }[] = [
     { id: 'daily', label: 'Daily' },
     { id: 'aging', label: 'Aging' },
@@ -51,38 +49,44 @@ export default function Reports() {
 
   useEffect(() => {
     fetchReportData(activeTab);
+    // Reset category filter when tab changes to non-aging
+    if (activeTab !== 'aging') setCategoryFilter("all");
   }, [activeTab]);
 
-  const fetchReportData = async (tab: ReportTab) => {
+  const getFilters = () => ({
+    fromDate: fromDate || undefined,
+    toDate: toDate || undefined,
+    category: categoryFilter !== 'all' ? categoryFilter : undefined,
+  });
+
+  const fetchReportData = async (tab: ReportTab, customFilters?: { fromDate?: string; toDate?: string; category?: string }) => {
     setLoading(true);
+    const filters = customFilters ?? getFilters();
     try {
-      switch(tab) {
+      let response;
+      switch (tab) {
         case 'daily':
-          await fetchDailySalesData();
+          response = await reportsService.getDailyReport(filters);
           break;
         case 'inventory':
-          {
-            const response = await reportsService.getInventoryReport();
-            setReportData(response.data || []);
-            setStats(response.stats || {});
-          }
+          response = await reportsService.getInventoryReport(filters);
           break;
         case 'aging':
-          {
-            const response = await reportsService.getAgingReport();
-            setReportData(response.data || []);
-            setStats(response.stats || {});
-          }
+          response = await reportsService.getAgingReport(filters);
           break;
         case 'services':
-          {
-            const response = await reportsService.getServicesReport();
-            setReportData(response.data || []);
-            setStats(response.stats || {});
-          }
+          response = await reportsService.getServicesReport(filters);
           break;
         default:
-          break;
+          return;
+      }
+      if (response.success) {
+        setReportData(response.data || []);
+        setStats(response.stats || null);
+      } else {
+        toast.error("Failed to load report");
+        setReportData([]);
+        setStats(null);
       }
     } catch (error) {
       console.error("Error fetching report:", error);
@@ -94,68 +98,18 @@ export default function Reports() {
     }
   };
 
-  const fetchDailySalesData = async () => {
-    try {
-      console.log('📅 Fetching today\'s sales data...');
-      const response = await salesService.getAllSales();
-      
-      if (response.success && Array.isArray(response.data)) {
-        const today = new Date();
-        today.setHours(0, 0, 0, 0);
-
-        const todaysSales = response.data.filter((sale: SaleRecord) => {
-          const saleDate = new Date(sale.saleDate || sale.createdAt);
-          saleDate.setHours(0, 0, 0, 0);
-          return saleDate.getTime() === today.getTime();
-        });
-
-        const formattedData = todaysSales.map((sale: SaleRecord) => ({
-          'Sale Number': sale.saleNumber,
-          'Customer': sale.customerName,
-          'Total Amount': `₹${sale.totalAmount.toLocaleString()}`,
-          'Paid Amount': `₹${sale.paidAmount.toLocaleString()}`,
-          'Outstanding': `₹${(sale.outstandingAmount ?? sale.balanceAmount ?? 0).toLocaleString()}`,
-          'Status': sale.status.charAt(0).toUpperCase() + sale.status.slice(1),
-          'Time': new Date(sale.saleDate || sale.createdAt).toLocaleTimeString('en-IN'),
-        }));
-
-        setReportData(formattedData);
-
-        const totalSales = todaysSales.length;
-        const totalAmount = todaysSales.reduce((sum: number, sale: SaleRecord) => sum + (sale.totalAmount || 0), 0);
-        const paidAmount = todaysSales.reduce((sum: number, sale: SaleRecord) => sum + (sale.paidAmount || 0), 0);
-        const outstanding = todaysSales.reduce((sum: number, sale: SaleRecord) => {
-          const outstandingAmt = sale.outstandingAmount ?? sale.balanceAmount ?? 0;
-          return sum + outstandingAmt;
-        }, 0);
-
-        const paidSales = todaysSales.filter((s: SaleRecord) => s.status === 'paid').length;
-        const partialSales = todaysSales.filter((s: SaleRecord) => s.status === 'partial').length;
-        const unpaidSales = todaysSales.filter((s: SaleRecord) => s.status === 'unpaid').length;
-
-        setStats({
-          totalSales,
-          totalAmount,
-          paidAmount,
-          outstanding,
-          paidCount: paidSales,
-          partialCount: partialSales,
-          unpaidCount: unpaidSales,
-          completionRate: totalAmount > 0 ? ((paidAmount / totalAmount) * 100).toFixed(1) : 0
-        });
-
-        console.log('✅ Today\'s sales data loaded:', { totalSales, totalAmount, outstanding });
-      } else {
-        setReportData([]);
-        setStats(null);
-      }
-    } catch (error) {
-      console.error("Error fetching daily sales data:", error);
-      toast.error("Failed to load daily sales data");
-      setReportData([]);
-      setStats(null);
-    }
+  const handleApplyFilters = () => {
+    fetchReportData(activeTab, getFilters());
   };
+
+  const handleClearFilters = () => {
+    setFromDate("");
+    setToDate("");
+    setCategoryFilter("all");
+    fetchReportData(activeTab, {});
+  };
+
+  const hasActiveFilters = fromDate || toDate || categoryFilter !== "all";
 
   const handleRefresh = async () => {
     setRefreshing(true);
@@ -173,7 +127,6 @@ export default function Reports() {
       toast.error("No data to export");
       return;
     }
-
     const csv = convertToCSV(reportData);
     downloadCSV(csv, `${activeTab}_report`);
     toast.success("Report exported successfully");
@@ -181,33 +134,26 @@ export default function Reports() {
 
   const convertToCSV = (data: any[]) => {
     if (data.length === 0) return '';
-
     const headers = Object.keys(data[0]);
-    const csvContent = [
+    return [
       headers.join(','),
       ...data.map(row =>
         headers.map(header => {
           const value = row[header];
-          if (typeof value === 'string' && value.includes(',')) {
-            return `"${value}"`;
-          }
+          if (typeof value === 'string' && value.includes(',')) return `"${value}"`;
           return value || '';
         }).join(',')
       )
     ].join('\n');
-
-    return csvContent;
   };
 
   const downloadCSV = (csv: string, fileName: string) => {
     const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
     const link = document.createElement('a');
     const url = URL.createObjectURL(blob);
-
     link.setAttribute('href', url);
     link.setAttribute('download', `${fileName}_${new Date().toISOString().split('T')[0]}.csv`);
     link.style.visibility = 'hidden';
-
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
@@ -222,9 +168,9 @@ export default function Reports() {
           <Card className="border-teal-200 bg-teal-50">
             <CardContent className="p-6">
               <div className="space-y-2">
-                <p className="text-sm text-muted-foreground">Today's Sales</p>
+                <p className="text-sm text-muted-foreground">Total Sales</p>
                 <p className="text-3xl font-bold text-teal-600">{stats.totalSales}</p>
-                <p className="text-xs text-muted-foreground">Transactions today</p>
+                <p className="text-xs text-muted-foreground">Transactions in period</p>
               </div>
             </CardContent>
           </Card>
@@ -232,9 +178,9 @@ export default function Reports() {
           <Card className="border-blue-200 bg-blue-50">
             <CardContent className="p-6">
               <div className="space-y-2">
-                <p className="text-sm text-muted-foreground">Today's Amount</p>
+                <p className="text-sm text-muted-foreground">Total Amount</p>
                 <p className="text-3xl font-bold text-blue-600">₹{typeof stats.totalAmount === 'number' ? stats.totalAmount.toLocaleString() : stats.totalAmount}</p>
-                <p className="text-xs text-muted-foreground">Sale value today</p>
+                <p className="text-xs text-muted-foreground">Sale value in period</p>
               </div>
             </CardContent>
           </Card>
@@ -242,9 +188,9 @@ export default function Reports() {
           <Card className="border-green-200 bg-green-50">
             <CardContent className="p-6">
               <div className="space-y-2">
-                <p className="text-sm text-muted-foreground">Paid Today</p>
+                <p className="text-sm text-muted-foreground">Paid</p>
                 <p className="text-3xl font-bold text-green-600">₹{typeof stats.paidAmount === 'number' ? stats.paidAmount.toLocaleString() : stats.paidAmount}</p>
-                <p className="text-xs text-muted-foreground">Received today</p>
+                <p className="text-xs text-muted-foreground">Received in period</p>
               </div>
             </CardContent>
           </Card>
@@ -252,9 +198,9 @@ export default function Reports() {
           <Card className="border-red-200 bg-red-50">
             <CardContent className="p-6">
               <div className="space-y-2">
-                <p className="text-sm text-muted-foreground">Outstanding Today</p>
+                <p className="text-sm text-muted-foreground">Outstanding</p>
                 <p className="text-3xl font-bold text-red-600">₹{typeof stats.outstanding === 'number' ? stats.outstanding.toLocaleString() : stats.outstanding}</p>
-                <p className="text-xs text-muted-foreground">Pending from today</p>
+                <p className="text-xs text-muted-foreground">Pending in period</p>
               </div>
             </CardContent>
           </Card>
@@ -264,7 +210,7 @@ export default function Reports() {
               <div className="space-y-2">
                 <p className="text-sm text-muted-foreground">Collection Rate</p>
                 <p className="text-3xl font-bold">{stats.completionRate}%</p>
-                <p className="text-xs text-muted-foreground">Amount collected today</p>
+                <p className="text-xs text-muted-foreground">Amount collected</p>
               </div>
             </CardContent>
           </Card>
@@ -274,7 +220,7 @@ export default function Reports() {
               <div className="space-y-2">
                 <p className="text-sm text-muted-foreground">Paid Sales</p>
                 <p className="text-2xl font-bold text-green-600">{stats.paidCount}</p>
-                <p className="text-xs text-muted-foreground">Fully paid today</p>
+                <p className="text-xs text-muted-foreground">Fully paid</p>
               </div>
             </CardContent>
           </Card>
@@ -284,7 +230,7 @@ export default function Reports() {
               <div className="space-y-2">
                 <p className="text-sm text-muted-foreground">Partial Sales</p>
                 <p className="text-2xl font-bold text-yellow-600">{stats.partialCount}</p>
-                <p className="text-xs text-muted-foreground">Partially paid today</p>
+                <p className="text-xs text-muted-foreground">Partially paid</p>
               </div>
             </CardContent>
           </Card>
@@ -294,7 +240,7 @@ export default function Reports() {
               <div className="space-y-2">
                 <p className="text-sm text-muted-foreground">Unpaid Sales</p>
                 <p className="text-2xl font-bold text-red-600">{stats.unpaidCount}</p>
-                <p className="text-xs text-muted-foreground">Pending from today</p>
+                <p className="text-xs text-muted-foreground">Pending</p>
               </div>
             </CardContent>
           </Card>
@@ -313,8 +259,15 @@ export default function Reports() {
                 {key.replace(/([A-Z])/g, ' $1').toLowerCase()}
               </p>
               <p className="text-2xl font-bold">
-                {typeof value === 'number' 
-                  ? (key.includes('amount') || key.includes('value') || key.includes('total'))
+                {typeof value === 'number'
+                  ? (
+                    key.toLowerCase().includes('amount') ||
+                    key.toLowerCase().includes('value') ||
+                    key.toLowerCase().includes('price') ||
+                    key.toLowerCase().includes('revenue') ||
+                    key.toLowerCase().includes('collected') ||
+                    (key.toLowerCase().includes('outstanding') && !key.toLowerCase().includes('days'))
+                  )
                     ? `₹${value.toLocaleString()}`
                     : value.toLocaleString()
                   : String(value)
@@ -335,9 +288,9 @@ export default function Reports() {
           <p className="text-muted-foreground">View and analyze business data</p>
         </div>
         <div className="flex gap-2">
-          <Button 
-            variant="outline" 
-            size="sm" 
+          <Button
+            variant="outline"
+            size="sm"
             className="gap-2"
             onClick={handleRefresh}
             disabled={refreshing}
@@ -362,16 +315,82 @@ export default function Reports() {
           <button
             key={tab.id}
             onClick={() => setActiveTab(tab.id)}
-            className={`px-4 py-2 font-medium transition-colors whitespace-nowrap ${
-              activeTab === tab.id
-                ? 'text-teal-600 border-b-2 border-teal-600'
-                : 'text-muted-foreground hover:text-foreground'
-            }`}
+            className={`px-4 py-2 font-medium transition-colors whitespace-nowrap ${activeTab === tab.id
+              ? 'text-teal-600 border-b-2 border-teal-600'
+              : 'text-muted-foreground hover:text-foreground'
+              }`}
           >
             {tab.label}
           </button>
         ))}
       </div>
+
+      {/* Filter Bar */}
+      <Card className="border-dashed">
+        <CardContent className="p-4">
+          <div className="flex flex-wrap gap-3 items-end">
+            <div className="flex items-center gap-2 text-sm font-medium text-muted-foreground">
+              <Filter className="h-4 w-4" />
+              Filters
+            </div>
+
+            {/* From Date */}
+            <div className="flex flex-col gap-1">
+              <span className="text-xs text-muted-foreground">From Date</span>
+              <Input
+                type="date"
+                value={fromDate}
+                onChange={(e) => setFromDate(e.target.value)}
+                className="h-9 w-[150px]"
+              />
+            </div>
+
+            {/* To Date */}
+            <div className="flex flex-col gap-1">
+              <span className="text-xs text-muted-foreground">To Date</span>
+              <Input
+                type="date"
+                value={toDate}
+                onChange={(e) => setToDate(e.target.value)}
+                className="h-9 w-[150px]"
+              />
+            </div>
+
+            {/* Category — only for Aging tab */}
+            {activeTab === 'aging' && (
+              <div className="flex flex-col gap-1 min-w-[160px]">
+                <span className="text-xs text-muted-foreground">Customer Category</span>
+                <Select value={categoryFilter} onValueChange={setCategoryFilter}>
+                  <SelectTrigger className="h-9">
+                    <SelectValue placeholder="All Categories" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="all">All Categories</SelectItem>
+                    <SelectItem value="regular">Regular</SelectItem>
+                    <SelectItem value="retailer">Retailer</SelectItem>
+                    <SelectItem value="wholesaler">Wholesaler</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+            )}
+
+            <Button
+              className="h-9 bg-teal-500 hover:bg-teal-600 gap-2"
+              onClick={handleApplyFilters}
+            >
+              <Filter className="h-4 w-4" />
+              Apply
+            </Button>
+
+            {hasActiveFilters && (
+              <Button variant="ghost" className="h-9 gap-2 text-muted-foreground" onClick={handleClearFilters}>
+                <X className="h-4 w-4" />
+                Clear
+              </Button>
+            )}
+          </div>
+        </CardContent>
+      </Card>
 
       {/* Stats Cards */}
       <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
@@ -388,7 +407,7 @@ export default function Reports() {
             {activeTab === 'services' && 'Services Report'}
           </CardTitle>
           <p className="text-sm text-muted-foreground mt-2">
-            {activeTab === 'daily' && 'Real-time sales transactions for today with payment status'}
+            {activeTab === 'daily' && 'Sales transactions for selected period with payment status'}
             {activeTab === 'inventory' && 'Current stock levels and reorder list'}
             {activeTab === 'aging' && 'Customer outstanding amounts and aging'}
             {activeTab === 'services' && 'Services performance and statistics'}

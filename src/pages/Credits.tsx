@@ -4,7 +4,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { Search, Plus, Send, Wallet, Calendar, Loader2, AlertCircle, Edit } from "lucide-react";
+import { Search, Plus, Send, Wallet, Calendar, Loader2, AlertCircle, Edit, MessageCircle, Phone, ExternalLink } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import {
   Dialog,
@@ -67,6 +67,13 @@ export default function Credits() {
   const [reminderDialogOpen, setReminderDialogOpen] = useState(false);
   const [selectedCustomerForReminder, setSelectedCustomerForReminder] = useState<CustomerWithStatus | null>(null);
 
+  // Bulk reminders state
+  const [bulkDialogOpen, setBulkDialogOpen] = useState(false);
+  const [bulkChannel, setBulkChannel] = useState<'whatsapp' | 'sms'>('whatsapp');
+  const [bulkSending, setBulkSending] = useState(false);
+  const [bulkStep, setBulkStep] = useState<'select' | 'links'>('select');
+  const [waLinks, setWaLinks] = useState<Array<{ name: string; phone: string; message: string; balance: number }>>([]);
+
   // Summary stats
   const [summary, setSummary] = useState({
     totalOutstanding: 0,
@@ -96,17 +103,17 @@ export default function Credits() {
   const fetchData = async () => {
     setLoading(true);
     try {
-      const customersRes = await api.get('/customers');
+      const customersRes = await api.get('/customers') as { data: { success: boolean; data: Customer[] } };
 
       if (customersRes.data.success) {
         const allCust = customersRes.data.data || [];
         setAllCustomers(allCust);
-        
+
         const customersWithBalance = allCust.filter((c: Customer) => {
           const outstanding = c.outstanding || c.outstandingAmount || 0;
           return outstanding > 0;
         });
-        
+
         const customersWithStatus: CustomerWithStatus[] = customersWithBalance.map((customer: Customer) => {
           let daysOverdue = 0;
           let status: 'pending' | 'overdue' = 'pending';
@@ -119,9 +126,9 @@ export default function Credits() {
             const today = new Date();
             today.setHours(0, 0, 0, 0);
             dueDateObj.setHours(0, 0, 0, 0);
-            
+
             const daysDiff = Math.floor((today.getTime() - dueDateObj.getTime()) / (1000 * 60 * 60 * 24));
-            
+
             if (daysDiff > 0) {
               daysOverdue = daysDiff;
               status = 'overdue';
@@ -138,7 +145,7 @@ export default function Credits() {
             const lastDebit = customer.transactions
               .filter((t: any) => t.type === 'debit')
               .sort((a: any, b: any) => new Date(b.transactionDate).getTime() - new Date(a.transactionDate).getTime())[0];
-            
+
             if (lastDebit && lastDebit.description) {
               serviceName = lastDebit.description;
             }
@@ -180,13 +187,13 @@ export default function Credits() {
   // Handle customer selection and auto-fill amount
   const handleCustomerChange = (customerId: string) => {
     setCreditForm(prev => ({ ...prev, customerId }));
-    
+
     const customer = allCustomers.find(c => c._id === customerId);
     if (customer) {
       setSelectedCustomerData(customer);
       // Auto-fill with credit limit
-      setCreditForm(prev => ({ 
-        ...prev, 
+      setCreditForm(prev => ({
+        ...prev,
         amount: customer.creditLimit?.toString() || ""
       }));
     }
@@ -212,7 +219,7 @@ export default function Credits() {
         amount: amountValue,
         description: `Credit given${creditForm.note ? ` - ${creditForm.note}` : ''}`,
         date: new Date()
-      });
+      }) as { data: { success: boolean; message?: string } };
 
       if (!response.data.success) {
         toast.error(response.data.message || "Failed to add credit");
@@ -238,7 +245,7 @@ export default function Credits() {
       setCreditForm({ customerId: "", amount: "", dueDate: undefined, note: "" });
       setSelectedCustomerData(null);
       setAddingCredit(false);
-      
+
       // Refresh data after delay
       setTimeout(() => {
         fetchData();
@@ -266,7 +273,7 @@ export default function Credits() {
       const response = await api.post(`/customers/${selectedCustomer._id}/credit`, {
         amount: amount,
         description: `Payment received${paymentForm.note ? ` - ${paymentForm.note}` : ''}`
-      });
+      }) as { data: { success: boolean; message?: string } };
 
       if (response.data.success) {
         toast.success("Payment recorded successfully");
@@ -300,7 +307,7 @@ export default function Credits() {
     try {
       const response = await api.put(`/customers/${selectedCustomer._id}/due-date`, {
         dueDate: newDueDate.toISOString()
-      });
+      }) as { data: { success: boolean; message?: string } };
 
       if (response.data.success) {
         toast.success("Due date updated successfully");
@@ -308,7 +315,7 @@ export default function Credits() {
         setSelectedCustomer(null);
         setNewDueDate(undefined);
         setUpdatingDueDate(false);
-        
+
         setTimeout(() => {
           fetchData();
         }, 800);
@@ -323,22 +330,71 @@ export default function Credits() {
     }
   };
 
-  const handleSendReminder = async (customer: CustomerWithStatus) => {
-    // Navigate to Reminders page with customer info in state
-    navigate('/reminders', { state: { searchQuery: customer.name } });
+  const handleSendReminder = (customer: CustomerWithStatus) => {
+    // Open WhatsApp directly with pre-filled message for this customer
+    const outstanding = customer.outstandingAmount || 0;
+    const dueDateStr = customer.dueDate
+      ? new Date(customer.dueDate).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })
+      : 'Not set';
+    const message = `Hi ${customer.name}, this is a payment reminder. You have an outstanding balance of Rs.${outstanding} for ${customer.serviceName || 'credit'}. Due date: ${dueDateStr}. Please make the payment at your earliest convenience. Thank you!`;
+    // Clean phone: remove spaces, dashes, and ensure country code
+    const phone = customer.phone.replace(/[\s\-()]/g, '').replace(/^0/, '91').replace(/^(?!91)/, '91');
+    const waUrl = `https://wa.me/${phone}?text=${encodeURIComponent(message)}`;
+    window.open(waUrl, '_blank');
   };
 
   const handleBulkReminders = () => {
+    setBulkStep('select');
+    setWaLinks([]);
     const overdueCustomers = customers.filter(c => c.status === 'overdue');
     if (overdueCustomers.length === 0) {
       toast.info("No overdue customers to send reminders");
       return;
     }
-
-    overdueCustomers.forEach(customer => {
-      handleSendReminder(customer);
-    });
+    setBulkDialogOpen(true);
   };
+
+  const confirmBulkReminders = async () => {
+    setBulkSending(true);
+    try {
+      const response = await api.post('/credits/reminders/bulk', {
+        filter: 'all',       // Send to ALL customers with outstanding balance
+        channel: bulkChannel
+      }) as { data: { success: boolean; count: number; message?: string; customers?: Array<{ name: string; phone: string; message: string; balance: number }> } };
+
+      if (response.data.success) {
+        const customerList = response.data.customers || [];
+        if (bulkChannel === 'whatsapp') {
+          if (customerList.length > 0) {
+            // Show WhatsApp links step
+            setWaLinks(customerList);
+            setBulkStep('links');
+            toast.success(`${response.data.count} reminders ready! Open links below to send via WhatsApp.`);
+          } else {
+            toast.info('No customers with outstanding balance found.');
+            setBulkDialogOpen(false);
+          }
+        } else {
+          // SMS — just record in DB
+          if (response.data.count > 0) {
+            toast.success(`Recorded ${response.data.count} SMS reminders in database`);
+          } else {
+            toast.info('No customers with outstanding balance found.');
+          }
+          setBulkDialogOpen(false);
+        }
+        fetchData();
+      } else {
+        toast.error(response.data.message || "Failed to send reminders");
+      }
+    } catch (error: any) {
+      console.error('Bulk reminders error:', error);
+      toast.error(error.response?.data?.message || "Failed to send reminders");
+    } finally {
+      setBulkSending(false);
+    }
+  };
+
 
   const filteredCustomers = customers.filter(customer =>
     customer.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
@@ -369,15 +425,15 @@ export default function Credits() {
           <p className="text-muted-foreground">Track and manage customer credits</p>
         </div>
         <div className="flex gap-2">
-          <Button 
-            variant="outline" 
+          <Button
+            variant="outline"
             className="gap-2"
             onClick={handleBulkReminders}
           >
             <Send className="h-4 w-4" />
             Bulk Send Reminders
           </Button>
-          <Button 
+          <Button
             className="gap-2 bg-teal-500 hover:bg-teal-600"
             onClick={() => setAddCreditOpen(true)}
           >
@@ -613,7 +669,7 @@ export default function Credits() {
             <Button variant="outline" onClick={() => setAddCreditOpen(false)}>
               Cancel
             </Button>
-            <Button 
+            <Button
               className="bg-teal-500 hover:bg-teal-600"
               onClick={handleAddCredit}
               disabled={addingCredit}
@@ -684,7 +740,7 @@ export default function Credits() {
             <Button variant="outline" onClick={() => setPaymentDialogOpen(false)}>
               Cancel
             </Button>
-            <Button 
+            <Button
               className="bg-teal-500 hover:bg-teal-600"
               onClick={handleReceivePayment}
             >
@@ -748,7 +804,7 @@ export default function Credits() {
             <Button variant="outline" onClick={() => setEditDueDateOpen(false)} disabled={updatingDueDate}>
               Cancel
             </Button>
-            <Button 
+            <Button
               className="bg-teal-500 hover:bg-teal-600"
               onClick={handleUpdateDueDate}
               disabled={updatingDueDate}
@@ -756,6 +812,161 @@ export default function Credits() {
               {updatingDueDate ? "Updating..." : "Update Due Date"}
             </Button>
           </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Bulk Reminders Dialog – 2 steps */}
+      <Dialog open={bulkDialogOpen} onOpenChange={(open) => { setBulkDialogOpen(open); if (!open) { setBulkStep('select'); setWaLinks([]); } }}>
+        <DialogContent className={bulkStep === 'links' ? "sm:max-w-[520px]" : "sm:max-w-[425px]"}>
+          {bulkStep === 'select' ? (
+            <>
+              <DialogHeader>
+                <DialogTitle>Send Bulk Reminders</DialogTitle>
+                <DialogDescription>
+                  Notify {customers.filter(c => c.status === 'overdue').length} overdue customers
+                </DialogDescription>
+              </DialogHeader>
+
+              <div className="space-y-4 py-4">
+                <div className="space-y-2">
+                  <Label className="text-sm font-medium">Send Via:</Label>
+                  <Select value={bulkChannel} onValueChange={(value: 'whatsapp' | 'sms') => setBulkChannel(value)}>
+                    <SelectTrigger>
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="whatsapp">
+                        <div className="flex items-center gap-2">
+                          <MessageCircle className="h-4 w-4 text-green-600" />
+                          <span>WhatsApp</span>
+                        </div>
+                      </SelectItem>
+                      <SelectItem value="sms">
+                        <div className="flex items-center gap-2">
+                          <Phone className="h-4 w-4 text-blue-600" />
+                          <span>SMS / Text Message</span>
+                        </div>
+                      </SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+
+                <div className={`border rounded-lg p-3 ${bulkChannel === 'whatsapp' ? 'bg-green-50 border-green-200' : 'bg-blue-50 border-blue-200'}`}>
+                  <div className="flex gap-2">
+                    <div className={`mt-0.5 ${bulkChannel === 'whatsapp' ? 'text-green-600' : 'text-blue-600'}`}>
+                      {bulkChannel === 'whatsapp' ? <MessageCircle className="h-4 w-4" /> : <Phone className="h-4 w-4" />}
+                    </div>
+                    <div className={`text-xs ${bulkChannel === 'whatsapp' ? 'text-green-800' : 'text-blue-800'}`}>
+                      {bulkChannel === 'whatsapp' ? (
+                        <>
+                          <strong>WhatsApp:</strong> Reminders are recorded in the database. You'll get a list of WhatsApp links to send each customer's personalised message with one tap.
+                        </>
+                      ) : (
+                        <>
+                          <strong>SMS:</strong> Reminders will be recorded for all overdue customers in the database.
+                        </>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <DialogFooter>
+                <Button variant="outline" onClick={() => setBulkDialogOpen(false)} disabled={bulkSending}>
+                  Cancel
+                </Button>
+                <Button
+                  onClick={confirmBulkReminders}
+                  disabled={bulkSending}
+                  className="bg-teal-600 hover:bg-teal-700"
+                >
+                  {bulkSending ? (
+                    <>
+                      <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                      Processing...
+                    </>
+                  ) : (
+                    <>
+                      <Send className="h-4 w-4 mr-2" />
+                      Send via {bulkChannel === 'whatsapp' ? 'WhatsApp' : 'SMS'}
+                    </>
+                  )}
+                </Button>
+              </DialogFooter>
+            </>
+          ) : (
+            <>
+              <DialogHeader>
+                <DialogTitle className="flex items-center gap-2">
+                  <MessageCircle className="h-5 w-5 text-green-600" />
+                  WhatsApp Reminders Ready
+                </DialogTitle>
+                <DialogDescription>
+                  {waLinks.length} customer{waLinks.length !== 1 ? 's' : ''} with outstanding balance — click below to send
+                </DialogDescription>
+              </DialogHeader>
+
+              <div className="py-2">
+                {/* Send All Button */}
+                <a
+                  href={`https://wa.me/${(waLinks[0]?.phone || '').replace(/[\s\-()]/g, '').replace(/^0/, '91').replace(/^(?!91)/, '91')}?text=${encodeURIComponent(waLinks[0]?.message || '')}`}
+                  target="_blank"
+                  rel="noreferrer"
+                  className={`flex items-center justify-center gap-2 w-full mb-4 px-4 py-3 rounded-lg font-semibold text-sm text-white ${waLinks.length > 0 ? 'bg-green-600 hover:bg-green-700' : 'bg-gray-400 pointer-events-none'} transition-colors`}
+                  onClick={(e) => {
+                    // Open subsequent customers after a delay (browser allows first popup from direct click)
+                    waLinks.slice(1).forEach((c, i) => {
+                      setTimeout(() => {
+                        const phone = c.phone.replace(/[\s\-()]/g, '').replace(/^0/, '91').replace(/^(?!91)/, '91');
+                        window.open(`https://wa.me/${phone}?text=${encodeURIComponent(c.message)}`, '_blank');
+                      }, (i + 1) * 900);
+                    });
+                  }}
+                >
+                  <MessageCircle className="h-4 w-4" />
+                  Send All {waLinks.length} via WhatsApp
+                  <ExternalLink className="h-3.5 w-3.5" />
+                </a>
+
+                <div className="text-xs text-muted-foreground mb-2 px-1">Or send individually:</div>
+                <div className="space-y-2 max-h-[260px] overflow-y-auto pr-1">
+                  {waLinks.map((customer, idx) => {
+                    const cleanPhone = customer.phone.replace(/[\s\-()]/g, '').replace(/^0/, '91').replace(/^(?!91)/, '91');
+                    const waHref = `https://wa.me/${cleanPhone}?text=${encodeURIComponent(customer.message)}`;
+                    return (
+                      <div key={idx} className="flex items-center justify-between bg-gray-50 border rounded-lg px-3 py-2.5">
+                        <div className="flex-1 min-w-0 mr-3">
+                          <div className="font-medium text-sm truncate">{customer.name}</div>
+                          <div className="text-xs text-muted-foreground">{customer.phone}</div>
+                          <div className="text-xs font-semibold text-red-600 mt-0.5">₹{customer.balance.toLocaleString('en-IN')} due</div>
+                        </div>
+                        <a
+                          href={waHref}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="flex items-center gap-1.5 shrink-0 bg-green-600 hover:bg-green-700 text-white text-xs font-medium px-3 py-2 rounded-md transition-colors"
+                        >
+                          <MessageCircle className="h-3.5 w-3.5" />
+                          Open WhatsApp
+                          <ExternalLink className="h-3 w-3" />
+                        </a>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+
+              <DialogFooter>
+                <Button variant="outline" onClick={() => { setBulkStep('select'); setWaLinks([]); }}>
+                  Back
+                </Button>
+
+                <Button onClick={() => { setBulkDialogOpen(false); setBulkStep('select'); setWaLinks([]); }} className="bg-teal-600 hover:bg-teal-700">
+                  Done
+                </Button>
+              </DialogFooter>
+            </>
+          )}
         </DialogContent>
       </Dialog>
     </div>

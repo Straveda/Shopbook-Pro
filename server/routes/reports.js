@@ -1,6 +1,7 @@
 // FILE: server/routes/reports.js
 import express from 'express';
-import { getDatabase } from '../api/db.js';
+import { getDatabase, getUserQuery } from '../api/db.js';
+import { ObjectId } from 'mongodb';
 import { authenticateToken } from '../middleware/auth.js';
 
 const router = express.Router();
@@ -14,11 +15,13 @@ router.use(authenticateToken);
 router.get('/inventory', async (req, res) => {
   console.log('🔥 GET /api/reports/inventory');
   try {
+    const userIdStr = req.user.userId;
+    const userId = ObjectId.isValid(userIdStr) ? new ObjectId(userIdStr) : userIdStr;
     const db = await getDatabase();
 
     // Get inventory data
     const inventory = await db.collection('inventory')
-      .find({})
+      .find(getUserQuery(req))
       .sort({ quantity: 1 })
       .toArray();
 
@@ -65,41 +68,116 @@ router.get('/inventory', async (req, res) => {
 router.get('/daily', async (req, res) => {
   console.log('🔥 GET /api/reports/daily');
   try {
+    const userIdStr = req.user.userId;
+    const userId = ObjectId.isValid(userIdStr) ? new ObjectId(userIdStr) : userIdStr;
     const db = await getDatabase();
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
+    const { fromDate, toDate } = req.query;
 
-    // Get today's invoices
-    const invoices = await db.collection('invoices')
+    // Use provided date range or default to today
+    let startDate, endDate;
+    if (fromDate && fromDate.trim() !== "") {
+      startDate = new Date(fromDate);
+      if (isNaN(startDate.getTime())) {
+        startDate = new Date();
+      }
+      startDate.setHours(0, 0, 0, 0);
+    } else {
+      startDate = new Date();
+      startDate.setHours(0, 0, 0, 0);
+    }
+
+    if (toDate && toDate.trim() !== "") {
+      endDate = new Date(toDate);
+      if (isNaN(endDate.getTime())) {
+        endDate = new Date(startDate);
+        endDate.setDate(endDate.getDate() + 1);
+      }
+      endDate.setHours(23, 59, 59, 999);
+    } else {
+      endDate = new Date(startDate);
+      if (fromDate && !toDate) {
+        // If fromDate but no toDate, maybe we want a range? 
+        // For now, default to end of that month or just +30 days if fromDate provided
+        endDate.setMonth(endDate.getMonth() + 1);
+      } else {
+        endDate.setDate(endDate.getDate() + 1);
+      }
+      endDate.setHours(23, 59, 59, 999);
+    }
+
+    console.log('📊 Daily Report Range:', startDate, '-', endDate);
+
+    // 1. Get SALES in date range
+    const sales = await db.collection('sales')
       .find({
-        createdAt: {
-          $gte: today,
-          $lt: new Date(today.getTime() + 24 * 60 * 60 * 1000)
-        }
+        ...getUserQuery(req),
+        saleDate: { $gte: startDate, $lte: endDate }
       })
-      .sort({ createdAt: -1 })
+      .sort({ saleDate: -1 })
       .toArray();
 
-    // Format data for report
-    const reportData = invoices.map(invoice => ({
-      'Invoice No': invoice.invoiceNo || invoice._id.toString().slice(-6),
-      'Customer': invoice.customerName || 'N/A',
-      'Total Amount': `₹${invoice.totalAmount?.toFixed(2) || 0}`,
-      'Tax': `₹${invoice.tax?.toFixed(2) || 0}`,
-      'Grand Total': `₹${invoice.grandTotal?.toFixed(2) || invoice.totalAmount?.toFixed(2) || 0}`,
-      'Payment Status': invoice.paymentStatus || 'Pending',
-      'Date': new Date(invoice.createdAt).toLocaleDateString()
+    // 2. Get LEDGER entries in date range
+    const ledger = await db.collection('ledger')
+      .find({
+        ...getUserQuery(req),
+        date: { $gte: startDate, $lte: endDate }
+      })
+      .toArray();
+
+    // 3. Identify "Bills" from ledger
+    const ledgerBills = ledger.filter(entry =>
+      entry.type === 'Credit' && !entry.saleReference && (entry.debit > 0)
+    );
+
+    // 4. Identify "Payments" from ledger
+    const ledgerPayments = ledger.filter(entry => entry.type === 'Payment');
+
+    // Format sales for report table
+    const salesData = sales.map(sale => ({
+      'Type': 'Sale',
+      'Ref': sale.saleNumber,
+      'Customer': sale.customerName || 'Walk-in',
+      'Total': `₹${sale.totalAmount?.toLocaleString() || 0}`,
+      'Paid': `₹${sale.paidAmount?.toLocaleString() || 0}`,
+      'Outstanding': `₹${(sale.outstandingAmount || sale.balanceAmount || 0).toLocaleString()}`,
+      'Status': (sale.status || 'Pending').charAt(0).toUpperCase() + (sale.status || 'Pending').slice(1),
+      'Time': new Date(sale.saleDate || sale.createdAt).toLocaleTimeString('en-IN')
     }));
 
-    // Calculate statistics
+    // Format ledger bills for report table
+    const billsData = ledgerBills.map(bill => ({
+      'Type': 'Bill',
+      'Ref': bill.description,
+      'Customer': 'Direct Entry',
+      'Total': `₹${bill.debit?.toLocaleString() || 0}`,
+      'Paid': '₹0',
+      'Outstanding': `₹${bill.debit?.toLocaleString() || 0}`,
+      'Status': 'Unpaid',
+      'Time': new Date(bill.date).toLocaleTimeString('en-IN')
+    }));
+
+    const reportData = [...salesData, ...billsData];
+
+    // Calculate unified statistics
+    const salesTotal = sales.reduce((sum, s) => sum + (s.totalAmount || 0), 0);
+    const billsTotal = ledgerBills.reduce((sum, b) => sum + (b.debit || 0), 0);
+    const totalAmount = salesTotal + billsTotal;
+
+    const paidToday = ledgerPayments.reduce((sum, e) => sum + (e.credit || 0), 0);
+    const outstandingToday = sales.reduce((sum, s) => sum + (s.outstandingAmount || s.balanceAmount || 0), 0) + billsTotal;
+
     const stats = {
-      totalSales: invoices.length,
-      totalAmount: invoices.reduce((sum, inv) => sum + (inv.totalAmount || 0), 0),
-      totalTax: invoices.reduce((sum, inv) => sum + (inv.tax || 0), 0),
-      grandTotal: invoices.reduce((sum, inv) => sum + (inv.grandTotal || inv.totalAmount || 0), 0)
+      totalSales: sales.length + ledgerBills.length,
+      totalAmount: totalAmount,
+      paidAmount: paidToday,
+      outstanding: outstandingToday,
+      paidCount: sales.filter(s => s.status === 'paid').length,
+      partialCount: sales.filter(s => s.status === 'partial').length,
+      unpaidCount: (sales.filter(s => s.status === 'unpaid').length) + ledgerBills.length,
+      completionRate: totalAmount > 0 ? ((paidToday / totalAmount) * 100).toFixed(1) : 0
     };
 
-    console.log('✅ Daily report generated');
+    console.log('✅ Daily report generated:', { count: reportData.length, totalAmount, paidToday });
 
     res.json({
       success: true,
@@ -122,24 +200,70 @@ router.get('/daily', async (req, res) => {
 router.get('/aging', async (req, res) => {
   console.log('🔥 GET /api/reports/aging');
   try {
+    const userIdStr = req.user.userId;
+    const userId = ObjectId.isValid(userIdStr) ? new ObjectId(userIdStr) : userIdStr;
     const db = await getDatabase();
+    const { fromDate, toDate, category } = req.query;
 
-    // Get customers with outstanding amounts
+    let agingQuery = {
+      ...getUserQuery(req),
+      outstanding: { $gt: 0 }
+    };
+
+    // Category filter
+    if (category && category !== 'all') {
+      const normalizedCategory = category.toLowerCase().trim();
+      console.log('🔍 Aging Report Filtering by category:', normalizedCategory);
+
+      if (normalizedCategory === 'regular') {
+        // "regular" is the default — also include customers where category is missing/null
+        agingQuery.$or = [
+          { category: 'regular' },
+          { category: { $exists: false } },
+          { category: null },
+          { category: '' }
+        ];
+      } else {
+        agingQuery.category = normalizedCategory;
+      }
+    }
+
+    // Date range filter on lastTransaction
+    if ((fromDate && fromDate.trim() !== "") || (toDate && toDate.trim() !== "")) {
+      agingQuery.lastTransaction = {};
+      if (fromDate && fromDate.trim() !== "") {
+        const start = new Date(fromDate);
+        if (!isNaN(start.getTime())) {
+          agingQuery.lastTransaction.$gte = start;
+        }
+      }
+      if (toDate && toDate.trim() !== "") {
+        const to = new Date(toDate);
+        if (!isNaN(to.getTime())) {
+          to.setHours(23, 59, 59, 999);
+          agingQuery.lastTransaction.$lte = to;
+        }
+      }
+    }
+
+    console.log('📊 Aging Query:', JSON.stringify(agingQuery));
+
     const customers = await db.collection('customers')
-      .find({ outstanding: { $gt: 0 } })  // ✅ Changed from outstandingAmount to outstanding
+      .find(agingQuery)
       .sort({ outstanding: -1 })
       .toArray();
 
     // Format data for report
     const reportData = customers.map(customer => {
-      const lastTransaction = customer.lastTransaction 
-        ? new Date(customer.lastTransaction) 
+      const lastTransaction = customer.lastTransaction
+        ? new Date(customer.lastTransaction)
         : new Date();
       const daysDiff = Math.floor((new Date() - lastTransaction) / (1000 * 60 * 60 * 24));
 
       return {
         'Customer Name': customer.name,
         'Phone': customer.phone,
+        'Category': customer.category ? customer.category.charAt(0).toUpperCase() + customer.category.slice(1) : 'Regular',
         'Outstanding': `₹${customer.outstanding?.toFixed(2) || 0}`,
         'Credit Limit': `₹${customer.creditLimit?.toFixed(2) || 0}`,
         'Days Outstanding': daysDiff,
@@ -177,7 +301,7 @@ router.get('/aging', async (req, res) => {
       error: error.message
     });
   }
-});
+});;
 
 // ============================================
 // SERVICES REPORT
@@ -185,24 +309,46 @@ router.get('/aging', async (req, res) => {
 router.get('/services', async (req, res) => {
   console.log('🔥 GET /api/reports/services');
   try {
+    const userIdStr = req.user.userId;
+    const userId = ObjectId.isValid(userIdStr) ? new ObjectId(userIdStr) : userIdStr;
     const db = await getDatabase();
+    const { fromDate, toDate } = req.query;
 
     // Get all services
     const services = await db.collection('services')
-      .find({})
+      .find(getUserQuery(req))
       .sort({ name: 1 })
       .toArray();
 
-    // Get invoices to calculate usage
-    const invoices = await db.collection('invoices')
-      .find({})
+    // Build sales query with optional date range
+    let salesQuery = { ...getUserQuery(req) };
+    if ((fromDate && fromDate.trim() !== "") || (toDate && toDate.trim() !== "")) {
+      salesQuery.saleDate = {};
+      if (fromDate && fromDate.trim() !== "") {
+        const start = new Date(fromDate);
+        if (!isNaN(start.getTime())) {
+          salesQuery.saleDate.$gte = start;
+        }
+      }
+      if (toDate && toDate.trim() !== "") {
+        const to = new Date(toDate);
+        if (!isNaN(to.getTime())) {
+          to.setHours(23, 59, 59, 999);
+          salesQuery.saleDate.$lte = to;
+        }
+      }
+    }
+
+    console.log('📊 Services Sales Query:', JSON.stringify(salesQuery));
+
+    const sales = await db.collection('sales')
+      .find(salesQuery)
       .toArray();
 
     // Format data for report
     const reportData = services.map(service => {
-      // Count how many times this service was used
-      const usageCount = invoices.filter(inv => 
-        inv.items && inv.items.some(item => item.serviceCode === service.code)
+      const usageCount = sales.filter(sale =>
+        sale.items && sale.items.some(item => (item.serviceCode === service.code || item.itemCode === service.code))
       ).length;
 
       return {
@@ -248,25 +394,37 @@ router.get('/services', async (req, res) => {
 router.get('/stats', async (req, res) => {
   console.log('🔥 GET /api/reports/stats');
   try {
+    const userIdStr = req.user.userId;
+    const userId = ObjectId.isValid(userIdStr) ? new ObjectId(userIdStr) : userIdStr;
     const db = await getDatabase();
 
     // Get all data
-    const [customers, inventory, invoices, services] = await Promise.all([
-      db.collection('customers').find({}).toArray(),
-      db.collection('inventory').find({}).toArray(),
-      db.collection('invoices').find({}).toArray(),
-      db.collection('services').find({}).toArray()
+    const [customers, inventory, sales, services, ledger] = await Promise.all([
+      db.collection('customers').find(getUserQuery(req)).toArray(),
+      db.collection('inventory').find(getUserQuery(req)).toArray(),
+      db.collection('sales').find(getUserQuery(req)).toArray(),
+      db.collection('services').find(getUserQuery(req)).toArray(),
+      db.collection('ledger').find(getUserQuery(req)).toArray()
     ]);
 
+    // Filter ledger for bills (Credit entries without sale reference)
+    const ledgerBills = ledger.filter(entry =>
+      entry.type === 'Credit' && !entry.saleReference && (entry.debit > 0)
+    );
+
     // Calculate statistics
+    const totalRevenue = sales.reduce((sum, s) => sum + (s.totalAmount || 0), 0) +
+      ledgerBills.reduce((sum, b) => sum + (b.debit || 0), 0);
+
     const stats = {
       totalCustomers: customers.length,
-      totalOutstanding: customers.reduce((sum, c) => sum + (c.outstandingAmount || 0), 0),
-      totalInventoryValue: inventory.reduce((sum, i) => sum + (i.quantity * i.purchasePrice), 0),
+      totalOutstanding: customers.reduce((sum, c) => sum + (c.outstanding || c.outstandingAmount || 0), 0),
+      totalInventoryValue: inventory.reduce((sum, i) => sum + (i.quantity * (i.purchasePrice || 0)), 0),
       lowStockItems: inventory.filter(i => i.quantity <= i.reorderLevel).length,
       totalServices: services.length,
-      totalSales: invoices.length,
-      totalRevenue: invoices.reduce((sum, inv) => sum + (inv.grandTotal || inv.totalAmount || 0), 0)
+      totalSales: sales.length + ledgerBills.length,
+      totalRevenue: totalRevenue,
+      totalCollected: ledger.filter(e => e.type === 'Payment').reduce((sum, e) => sum + (e.credit || 0), 0)
     };
 
     console.log('✅ Statistics generated');

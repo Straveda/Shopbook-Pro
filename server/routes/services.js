@@ -4,7 +4,7 @@
 // ============================================
 
 import express from 'express';
-import { getDatabase } from '../api/db.js';
+import { getDatabase, getUserQuery } from '../api/db.js';
 import { ObjectId } from 'mongodb';
 import { authenticateToken } from '../middleware/auth.js';
 
@@ -28,20 +28,22 @@ router.get('/', async (req, res) => {
   console.log('📥 GET /api/services');
   try {
     const { category, search, isActive } = req.query;
+    const userIdStr = req.user.userId;
+    const userId = ObjectId.isValid(userIdStr) ? new ObjectId(userIdStr) : userIdStr;
     const db = await getDatabase();
-    
-    let query = {};
-    
+    const userFilter = getUserQuery(req);
+    let query = { ...userFilter };
+
     // Filter by category
     if (category && category !== 'all') {
       query.category = category;
     }
-    
+
     // Filter by active status
     if (isActive !== undefined) {
       query.isActive = isActive === 'true';
     }
-    
+
     // Search by name or code
     if (search) {
       query.$or = [
@@ -49,20 +51,20 @@ router.get('/', async (req, res) => {
         { code: { $regex: search, $options: 'i' } }
       ];
     }
-    
+
     const servicesList = await db.collection('services')
       .find(query)
       .sort({ category: 1, name: 1 })
       .toArray();
-    
+
     // Add priceWithTax to each service
     const servicesWithTax = servicesList.map(service => ({
       ...service,
       priceWithTax: calculatePriceWithTax(service.price, service.tax)
     }));
-    
+
     console.log(`✅ Found ${servicesWithTax.length} services`);
-    
+
     res.json({
       success: true,
       data: servicesWithTax,
@@ -85,31 +87,34 @@ router.get('/:id', async (req, res) => {
   console.log('📥 GET /api/services/:id');
   try {
     const { id } = req.params;
-    
+
     if (!ObjectId.isValid(id)) {
       return res.status(400).json({
         success: false,
         message: 'Invalid service ID'
       });
     }
-    
+
+    const userIdStr = req.user.userId;
+    const userId = ObjectId.isValid(userIdStr) ? new ObjectId(userIdStr) : userIdStr;
     const db = await getDatabase();
     const service = await db.collection('services').findOne({
-      _id: new ObjectId(id)
+      _id: new ObjectId(id),
+      ...getUserQuery(req)
     });
-    
+
     if (!service) {
       return res.status(404).json({
         success: false,
         message: 'Service not found'
       });
     }
-    
+
     // Add priceWithTax
     service.priceWithTax = calculatePriceWithTax(service.price, service.tax);
-    
+
     console.log('✅ Service found:', service.name);
-    
+
     res.json({
       success: true,
       data: service
@@ -131,9 +136,9 @@ router.post('/', async (req, res) => {
   console.log('📥 POST /api/services');
   try {
     const { name, code, category, price, tax } = req.body;
-    
+
     console.log('📝 Creating service:', { name, code, category, price, tax });
-    
+
     // Validate required fields
     if (!name || !code || !category || price === undefined) {
       return res.status(400).json({
@@ -141,7 +146,7 @@ router.post('/', async (req, res) => {
         message: 'Missing required fields: name, code, category, price'
       });
     }
-    
+
     // Validate category
     const validCategories = ['Printing', 'Photocopy', 'Lamination', 'Binding', 'Scanning', 'Other'];
     if (!validCategories.includes(category)) {
@@ -150,7 +155,7 @@ router.post('/', async (req, res) => {
         message: 'Invalid category. Must be one of: ' + validCategories.join(', ')
       });
     }
-    
+
     // Validate price
     const servicePrice = parseFloat(price);
     if (isNaN(servicePrice) || servicePrice < 0) {
@@ -159,24 +164,28 @@ router.post('/', async (req, res) => {
         message: 'Price must be a non-negative number'
       });
     }
-    
+
     const db = await getDatabase();
+    const userIdStr = req.user.userId;
+    const userId = ObjectId.isValid(userIdStr) ? new ObjectId(userIdStr) : userIdStr;
     const codeUpper = code.toUpperCase().trim();
-    
+
     // Check for duplicate code
     const existing = await db.collection('services').findOne({
-      code: codeUpper
+      code: codeUpper,
+      ...getUserQuery(req)
     });
-    
+
     if (existing) {
       return res.status(400).json({
         success: false,
         message: `Service code '${codeUpper}' already exists`
       });
     }
-    
+
     // Create new service
     const newService = {
+      userId: userId,
       name: name.trim(),
       code: codeUpper,
       category,
@@ -186,15 +195,15 @@ router.post('/', async (req, res) => {
       createdAt: new Date(),
       updatedAt: new Date()
     };
-    
+
     const result = await db.collection('services').insertOne(newService);
-    
+
     // Add priceWithTax
     newService._id = result.insertedId;
     newService.priceWithTax = calculatePriceWithTax(newService.price, newService.tax);
-    
+
     console.log('✅ Service created:', result.insertedId);
-    
+
     res.status(201).json({
       success: true,
       message: 'Service created successfully',
@@ -218,35 +227,38 @@ router.put('/:id', async (req, res) => {
   try {
     const { id } = req.params;
     const { name, code, category, price, tax, isActive } = req.body;
-    
+
     if (!ObjectId.isValid(id)) {
       return res.status(400).json({
         success: false,
         message: 'Invalid service ID'
       });
     }
-    
+
     const db = await getDatabase();
-    
+
     // Check if service exists
+    const userId = new ObjectId(req.user.userId);
     const service = await db.collection('services').findOne({
-      _id: new ObjectId(id)
+      _id: new ObjectId(id),
+      userId: { $in: [req.user.userId, userId] }
     });
-    
+
     if (!service) {
       return res.status(404).json({
         success: false,
         message: 'Service not found'
       });
     }
-    
+
     // Check for duplicate code if code is being changed
     if (code && code.toUpperCase().trim() !== service.code) {
       const existing = await db.collection('services').findOne({
         code: code.toUpperCase().trim(),
-        _id: { $ne: new ObjectId(id) }
+        _id: { $ne: new ObjectId(id) },
+        ...getUserQuery(req)
       });
-      
+
       if (existing) {
         return res.status(400).json({
           success: false,
@@ -254,41 +266,42 @@ router.put('/:id', async (req, res) => {
         });
       }
     }
-    
+
     // Build update object
     const updateData = {
       updatedAt: new Date()
     };
-    
+
     if (name !== undefined) updateData.name = name.trim();
     if (code !== undefined) updateData.code = code.toUpperCase().trim();
     if (category !== undefined) updateData.category = category;
     if (price !== undefined) updateData.price = parseFloat(price);
     if (tax !== undefined) updateData.tax = parseFloat(tax);
     if (isActive !== undefined) updateData.isActive = isActive;
-    
+
     // Update service
     const result = await db.collection('services').updateOne(
-      { _id: new ObjectId(id) },
+      { _id: new ObjectId(id), ...getUserQuery(req) },
       { $set: updateData }
     );
-    
+
     if (result.matchedCount === 0) {
       return res.status(404).json({
         success: false,
         message: 'Service not found'
       });
     }
-    
+
     // Fetch updated service
     const updatedService = await db.collection('services').findOne({
-      _id: new ObjectId(id)
+      _id: new ObjectId(id),
+      ...getUserQuery(req)
     });
-    
+
     updatedService.priceWithTax = calculatePriceWithTax(updatedService.price, updatedService.tax);
-    
+
     console.log('✅ Service updated:', id);
-    
+
     res.json({
       success: true,
       message: 'Service updated successfully',
@@ -311,31 +324,32 @@ router.delete('/:id', async (req, res) => {
   console.log('📥 DELETE /api/services/:id');
   try {
     const { id } = req.params;
-    
+
     if (!ObjectId.isValid(id)) {
       return res.status(400).json({
         success: false,
         message: 'Invalid service ID'
       });
     }
-    
+
     const db = await getDatabase();
-    
-    // Check if service exists
+
+    const userId = new ObjectId(req.user.userId);
     const service = await db.collection('services').findOne({
-      _id: new ObjectId(id)
+      _id: new ObjectId(id),
+      userId: { $in: [req.user.userId, userId] }
     });
-    
+
     if (!service) {
       return res.status(404).json({
         success: false,
         message: 'Service not found'
       });
     }
-    
+
     // Soft delete - set isActive to false
     const result = await db.collection('services').updateOne(
-      { _id: new ObjectId(id) },
+      { _id: new ObjectId(id), ...getUserQuery(req) },
       {
         $set: {
           isActive: false,
@@ -343,16 +357,16 @@ router.delete('/:id', async (req, res) => {
         }
       }
     );
-    
+
     if (result.matchedCount === 0) {
       return res.status(404).json({
         success: false,
         message: 'Service not found'
       });
     }
-    
+
     console.log('✅ Service deleted (soft delete):', id);
-    
+
     res.json({
       success: true,
       message: 'Service deleted successfully'

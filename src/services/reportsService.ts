@@ -8,27 +8,21 @@ export interface ReportResponse {
   message?: string;
 }
 
+export interface ReportFilters {
+  fromDate?: string;
+  toDate?: string;
+  category?: string;
+}
+
 const reportsService = {
   // Get inventory/stock report
-  getInventoryReport: async (): Promise<ReportResponse> => {
+  getInventoryReport: async (filters?: ReportFilters): Promise<ReportResponse> => {
     try {
-      const response = await api.get('/reports/inventory');
-      console.log('Inventory Report:', response.data);
-      
-      if (response.data && response.data.success) {
-        return response.data;
-      } else if (Array.isArray(response.data)) {
-        return {
-          success: true,
-          data: response.data,
-        };
-      } else {
-        return {
-          success: false,
-          data: [],
-          message: 'Invalid response format'
-        };
-      }
+      const params: any = {};
+      if (filters?.fromDate) params.fromDate = filters.fromDate;
+      if (filters?.toDate) params.toDate = filters.toDate;
+      const response = await api.get<ReportResponse>('/reports/inventory', { params });
+      return response.data || { success: true, data: [] };
     } catch (error: any) {
       console.error('Error fetching inventory report:', error);
       return {
@@ -40,25 +34,13 @@ const reportsService = {
   },
 
   // Get daily sales report
-  getDailyReport: async (): Promise<ReportResponse> => {
+  getDailyReport: async (filters?: ReportFilters): Promise<ReportResponse> => {
     try {
-      const response = await api.get('/reports/daily');
-      console.log('Daily Report:', response.data);
-      
-      if (response.data && response.data.success) {
-        return response.data;
-      } else if (Array.isArray(response.data)) {
-        return {
-          success: true,
-          data: response.data,
-        };
-      } else {
-        return {
-          success: false,
-          data: [],
-          message: 'Invalid response format'
-        };
-      }
+      const params: any = {};
+      if (filters?.fromDate) params.fromDate = filters.fromDate;
+      if (filters?.toDate) params.toDate = filters.toDate;
+      const response = await api.get<ReportResponse>('/reports/daily', { params });
+      return response.data || { success: true, data: [] };
     } catch (error: any) {
       console.error('Error fetching daily report:', error);
       return {
@@ -70,25 +52,14 @@ const reportsService = {
   },
 
   // Get aging report (customer outstanding)
-  getAgingReport: async (): Promise<ReportResponse> => {
+  getAgingReport: async (filters?: ReportFilters): Promise<ReportResponse> => {
     try {
-      const response = await api.get('/reports/aging');
-      console.log('Aging Report:', response.data);
-      
-      if (response.data && response.data.success) {
-        return response.data;
-      } else if (Array.isArray(response.data)) {
-        return {
-          success: true,
-          data: response.data,
-        };
-      } else {
-        return {
-          success: false,
-          data: [],
-          message: 'Invalid response format'
-        };
-      }
+      const params: any = {};
+      if (filters?.fromDate) params.fromDate = filters.fromDate;
+      if (filters?.toDate) params.toDate = filters.toDate;
+      if (filters?.category && filters.category !== 'all') params.category = filters.category;
+      const response = await api.get<ReportResponse>('/reports/aging', { params });
+      return response.data || { success: true, data: [] };
     } catch (error: any) {
       console.error('Error fetching aging report:', error);
       return {
@@ -100,25 +71,13 @@ const reportsService = {
   },
 
   // Get services report
-  getServicesReport: async (): Promise<ReportResponse> => {
+  getServicesReport: async (filters?: ReportFilters): Promise<ReportResponse> => {
     try {
-      const response = await api.get('/reports/services');
-      console.log('Services Report:', response.data);
-      
-      if (response.data && response.data.success) {
-        return response.data;
-      } else if (Array.isArray(response.data)) {
-        return {
-          success: true,
-          data: response.data,
-        };
-      } else {
-        return {
-          success: false,
-          data: [],
-          message: 'Invalid response format'
-        };
-      }
+      const params: any = {};
+      if (filters?.fromDate) params.fromDate = filters.fromDate;
+      if (filters?.toDate) params.toDate = filters.toDate;
+      const response = await api.get<ReportResponse>('/reports/services', { params });
+      return response.data || { success: true, data: [] };
     } catch (error: any) {
       console.error('Error fetching services report:', error);
       return {
@@ -132,8 +91,8 @@ const reportsService = {
   // Get dashboard statistics
   getDashboardStats: async (): Promise<ReportResponse> => {
     try {
-      const response = await api.get('/reports/stats');
-      return response.data;
+      const response = await api.get<ReportResponse>('/reports/stats');
+      return response.data || { success: false, message: 'No data received' };
     } catch (error: any) {
       console.error('Error fetching stats:', error);
       return {

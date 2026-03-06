@@ -4,12 +4,12 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
-import { 
-  Search, 
-  MessageCircle, 
-  Phone, 
-  Calendar, 
-  Loader2, 
+import {
+  Search,
+  MessageCircle,
+  Phone,
+  Calendar,
+  Loader2,
   CheckCircle2,
   Copy,
   Edit2,
@@ -34,6 +34,7 @@ import {
 } from "@/components/ui/select";
 import { toast } from "sonner";
 import customerService from "@/services/customerService";
+import reminderService from "@/services/ReminderService";
 import { formatDistanceToNow } from "date-fns";
 
 interface Customer {
@@ -50,10 +51,10 @@ export default function ManualReminders() {
   const [searchQuery, setSearchQuery] = useState("");
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [loading, setLoading] = useState(true);
-  const [customMessage, setCustomMessage] = useState<{[key: string]: string}>({});
+  const [customMessage, setCustomMessage] = useState<{ [key: string]: string }>({});
   const [editingMessage, setEditingMessage] = useState<string | null>(null);
   const [sentReminders, setSentReminders] = useState<Set<string>>(new Set());
-  
+
   // Send Method Dialog State
   const [sendDialogOpen, setSendDialogOpen] = useState(false);
   const [selectedCustomerForSend, setSelectedCustomerForSend] = useState<Customer | null>(null);
@@ -105,19 +106,19 @@ export default function ManualReminders() {
       return customMessage[customer._id];
     }
 
-    const daysOverdue = customer.lastTransaction 
+    const daysOverdue = customer.lastTransaction
       ? Math.floor((new Date().getTime() - new Date(customer.lastTransaction).getTime()) / (1000 * 60 * 60 * 24))
       : 0;
 
     let message = `Hello ${customer.name},\n\n`;
-    
+
     if (daysOverdue > 30) {
       message += `This is a friendly reminder about your outstanding payment of ₹${customer.outstandingAmount.toLocaleString()}.\n\n`;
       message += `It has been ${daysOverdue} days since your last transaction. `;
     } else {
       message += `You have an outstanding balance of ₹${customer.outstandingAmount.toLocaleString()}. `;
     }
-    
+
     message += `Please settle your payment at your earliest convenience.\n\n`;
     message += `Thank you for your business!\n`;
     message += `- ShopBook`;
@@ -138,16 +139,59 @@ export default function ManualReminders() {
     const phone = selectedCustomerForSend.phone.replace(/\D/g, '');
     const formattedPhone = phone.length === 10 ? `91${phone}` : phone;
 
+    console.log(`📱 [Redirect] Method: ${sendMethod}, Phone: ${formattedPhone}, Name: ${selectedCustomerForSend.name}`);
+
+    let redirectUrl = '';
     if (sendMethod === 'whatsapp') {
       const encodedMessage = encodeURIComponent(message);
-      const whatsappUrl = `https://wa.me/${formattedPhone}?text=${encodedMessage}`;
-      window.open(whatsappUrl, '_blank');
-      toast.success(`WhatsApp opened for ${selectedCustomerForSend.name}`);
-    } else if (sendMethod === 'sms') {
-      const smsUrl = `sms:${formattedPhone}?body=${encodeURIComponent(message)}`;
-      window.location.href = smsUrl;
-      toast.success(`SMS app opened for ${selectedCustomerForSend.name}`);
+      // Use wa.me for more reliable deep-linking
+      redirectUrl = `https://wa.me/${formattedPhone}?text=${encodedMessage}`;
+    } else {
+      redirectUrl = `sms:${formattedPhone}?body=${encodeURIComponent(message)}`;
     }
+
+    console.log(`🔗 [Redirect] URL: ${redirectUrl}`);
+
+    // Try opening in new window/tab
+    if (sendMethod === 'whatsapp') {
+      const newWin = window.open(redirectUrl, '_blank');
+      if (!newWin || newWin.closed || typeof newWin.closed === 'undefined') {
+        // Fallback for popup blockers
+        window.location.href = redirectUrl;
+      }
+    } else {
+      window.location.href = redirectUrl;
+    }
+
+    // Show toast with manual link fallback in case everything fails
+    toast.success(
+      <div className="flex flex-col gap-1">
+        <span className="font-medium">
+          {sendMethod === 'whatsapp' ? 'WhatsApp opened' : 'SMS app opened'} for {selectedCustomerForSend.name}
+        </span>
+        <a
+          href={redirectUrl}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="text-xs text-blue-600 underline hover:text-blue-800"
+          onClick={(e) => e.stopPropagation()}
+        >
+          Click here if it didn't open automatically
+        </a>
+      </div>,
+      { duration: 6000 }
+    );
+
+    // Persist reminder to DB in the background
+    reminderService.createReminder({
+      customerId: selectedCustomerForSend._id,
+      customerName: selectedCustomerForSend.name,
+      customerPhone: selectedCustomerForSend.phone,
+      message,
+      reminderDate: new Date(),
+      channel: sendMethod,
+      status: 'sent',
+    }).catch((err: any) => console.warn('Could not save reminder to DB:', err));
 
     markAsSent(selectedCustomerForSend._id);
     setSendDialogOpen(false);
@@ -219,8 +263,8 @@ export default function ManualReminders() {
             Send reminders via WhatsApp or SMS - Choose your preferred method
           </p>
         </div>
-        <Button 
-          variant="outline" 
+        <Button
+          variant="outline"
           className="gap-2"
           onClick={() => {
             setSentReminders(new Set());
@@ -283,11 +327,10 @@ export default function ManualReminders() {
           const message = generateMessage(customer);
 
           return (
-            <Card 
-              key={customer._id} 
-              className={`hover:shadow-md transition-shadow ${
-                isSent ? 'bg-green-50 border-green-200' : ''
-              }`}
+            <Card
+              key={customer._id}
+              className={`hover:shadow-md transition-shadow ${isSent ? 'bg-green-50 border-green-200' : ''
+                }`}
             >
               <CardContent className="p-6">
                 <div className="space-y-4">
@@ -369,7 +412,7 @@ export default function ManualReminders() {
                         </Button>
                       </div>
                     </div>
-                    
+
                     {isEditing ? (
                       <Textarea
                         value={message}
@@ -412,7 +455,7 @@ export default function ManualReminders() {
       {!loading && filteredCustomers.length === 0 && (
         <div className="text-center py-12">
           <p className="text-muted-foreground">
-            {searchQuery 
+            {searchQuery
               ? "No customers found matching your search"
               : "No customers with outstanding balance"}
           </p>
@@ -428,7 +471,7 @@ export default function ManualReminders() {
               Select how you want to send the reminder to {selectedCustomerForSend?.name}
             </DialogDescription>
           </DialogHeader>
-          
+
           <div className="space-y-4 py-4">
             <div className="space-y-2">
               <Label className="text-sm font-medium">Send Via:</Label>
@@ -488,7 +531,7 @@ export default function ManualReminders() {
             <Button variant="outline" onClick={() => setSendDialogOpen(false)}>
               Cancel
             </Button>
-            <Button 
+            <Button
               onClick={handleSendReminder}
               className="bg-teal-600 hover:bg-teal-700"
             >

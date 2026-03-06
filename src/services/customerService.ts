@@ -9,7 +9,9 @@ export interface Customer {
   address: string;
   city: string;
   creditLimit: number;
+  category?: 'regular' | 'retailer' | 'wholesaler';
   outstanding: number;
+  outstandingAmount: number;
   totalPaid: number;
   lastTransaction?: string;
   dueDate?: string;
@@ -31,12 +33,20 @@ export interface CustomerResponse {
 
 const customerService = {
   // Get all customers
-  getAllCustomers: async (search?: string): Promise<CustomerResponse> => {
+  getAllCustomers: async (params?: {
+    search?: string;
+    category?: string;
+    fromDate?: string;
+    toDate?: string;
+  }): Promise<CustomerResponse> => {
     try {
-      const response = await api.get('/customers', {
-        params: search ? { search } : {}
-      });
-      return response.data;
+      const queryParams: any = {};
+      if (params?.search) queryParams.search = params.search;
+      if (params?.category && params.category !== 'all') queryParams.category = params.category;
+      if (params?.fromDate) queryParams.fromDate = params.fromDate;
+      if (params?.toDate) queryParams.toDate = params.toDate;
+      const response = await api.get<CustomerResponse>('/customers', { params: queryParams });
+      return response.data || { success: true, data: [] };
     } catch (error: any) {
       console.error('Error fetching customers:', error);
       return {
@@ -50,8 +60,8 @@ const customerService = {
   // Get a single customer by ID
   getCustomerById: async (id: string): Promise<CustomerResponse> => {
     try {
-      const response = await api.get(`/customers/${id}`);
-      return response.data;
+      const response = await api.get<CustomerResponse>(`/customers/${id}`);
+      return response.data || { success: false, message: 'No data received' };
     } catch (error: any) {
       console.error('Error fetching customer:', error);
       return {
@@ -69,11 +79,12 @@ const customerService = {
     address: string;
     city: string;
     creditLimit: number;
+    category?: string;
   }): Promise<CustomerResponse> => {
     try {
-      const response = await api.post('/customers', customerData);
+      const response = await api.post<CustomerResponse>('/customers', customerData);
       console.log('✅ Customer created response:', response.data);
-      return response.data;
+      return response.data || { success: true };
     } catch (error: any) {
       console.error('Error creating customer:', error);
       return {
@@ -94,9 +105,9 @@ const customerService = {
   }): Promise<CustomerResponse> => {
     try {
       console.log('📝 Adding transaction:', { customerId, ...transactionData });
-      const response = await api.post(`/customers/${customerId}/transaction`, transactionData);
+      const response = await api.post<CustomerResponse>(`/customers/${customerId}/transaction`, transactionData);
       console.log('✅ Transaction response:', response.data);
-      return response.data;
+      return response.data || { success: true };
     } catch (error: any) {
       console.error('Error adding transaction:', error);
       return {
@@ -113,8 +124,8 @@ const customerService = {
     remarks?: string;
   }): Promise<CustomerResponse> => {
     try {
-      const response = await api.post(`/customers/${customerId}/receive-payment`, paymentData);
-      return response.data;
+      const response = await api.post<CustomerResponse>(`/customers/${customerId}/receive-payment`, paymentData);
+      return response.data || { success: true };
     } catch (error: any) {
       console.error('Error receiving payment:', error);
       return {
@@ -127,11 +138,11 @@ const customerService = {
   // Record debit (customer owes money)
   recordDebit: async (customerId: string, amount: number, description: string): Promise<CustomerResponse> => {
     try {
-      const response = await api.post(`/customers/${customerId}/debit`, {
+      const response = await api.post<CustomerResponse>(`/customers/${customerId}/debit`, {
         amount,
         description
       });
-      return response.data;
+      return response.data || { success: true };
     } catch (error: any) {
       console.error('Error recording debit:', error);
       return {
@@ -149,10 +160,11 @@ const customerService = {
     address?: string;
     city?: string;
     creditLimit?: number;
+    category?: string;
   }): Promise<CustomerResponse> => {
     try {
-      const response = await api.put(`/customers/${id}`, customerData);
-      return response.data;
+      const response = await api.put<CustomerResponse>(`/customers/${id}`, customerData);
+      return response.data || { success: true };
     } catch (error: any) {
       console.error('Error updating customer:', error);
       return {
@@ -165,8 +177,8 @@ const customerService = {
   // Update customer due date
   updateDueDate: async (id: string, dueDate: string): Promise<CustomerResponse> => {
     try {
-      const response = await api.put(`/customers/${id}/due-date`, { dueDate });
-      return response.data;
+      const response = await api.put<CustomerResponse>(`/customers/${id}/due-date`, { dueDate });
+      return response.data || { success: true };
     } catch (error: any) {
       console.error('Error updating due date:', error);
       return {
@@ -179,8 +191,8 @@ const customerService = {
   // Delete a customer
   deleteCustomer: async (id: string): Promise<CustomerResponse> => {
     try {
-      const response = await api.delete(`/customers/${id}`);
-      return response.data;
+      const response = await api.delete<CustomerResponse>(`/customers/${id}`);
+      return response.data || { success: true };
     } catch (error: any) {
       console.error('Error deleting customer:', error);
       return {
@@ -195,8 +207,8 @@ const customerService = {
     content: string;
   }): Promise<CustomerResponse> => {
     try {
-      const response = await api.post(`/customers/${customerId}/notes`, noteData);
-      return response.data;
+      const response = await api.post<CustomerResponse>(`/customers/${customerId}/notes`, noteData);
+      return response.data || { success: true };
     } catch (error: any) {
       console.error('Error adding note:', error);
       return {
@@ -209,8 +221,8 @@ const customerService = {
   // Delete a note from customer
   deleteNote: async (customerId: string, noteId: string): Promise<CustomerResponse> => {
     try {
-      const response = await api.delete(`/customers/${customerId}/notes/${noteId}`);
-      return response.data;
+      const response = await api.delete<CustomerResponse>(`/customers/${customerId}/notes/${noteId}`);
+      return response.data || { success: true };
     } catch (error: any) {
       console.error('Error deleting note:', error);
       return {

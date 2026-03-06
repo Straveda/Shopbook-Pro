@@ -178,11 +178,14 @@ const creditBookService = {
   },
 
   // Send bulk reminders
-  sendBulkReminders: async (filter?: 'overdue' | 'all') => {
+  sendBulkReminders: async (filter?: 'overdue' | 'all', channel: 'whatsapp' | 'sms' = 'whatsapp') => {
     try {
       const response = await axios.post(
         `${API_BASE_URL}/credits/reminders/bulk`,
-        { filter: filter || 'overdue' },
+        {
+          filter: filter || 'overdue',
+          channel
+        },
         {
           headers: getAuthHeader()
         }
