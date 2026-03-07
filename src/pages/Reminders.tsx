@@ -121,7 +121,7 @@ export default function ManualReminders() {
 
     message += `Please settle your payment at your earliest convenience.\n\n`;
     message += `Thank you for your business!\n`;
-    message += `- ShopBook`;
+    message += `- Mahesh Printers`;
 
     return message;
   };
